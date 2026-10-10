@@ -35,11 +35,25 @@ dialog{width:min(92vw,460px);border:0;border-radius:18px;padding:0;box-shadow:0 
 .sharedTag{display:inline-block;margin-left:5px;padding:2px 6px;border-radius:99px;background:#eaf6ee;color:#176b3a;font-size:10px;font-weight:800}
 
 @media(min-width:650px){.app{padding-top:20px}.gpsgrid{grid-template-columns:repeat(4,1fr)}.stats{grid-template-columns:repeat(4,1fr)}.previewWrap{height:430px}}
+
+.compareToolbar{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+.compareToolbar .tinybtn.active{background:var(--green);color:#fff;border-color:var(--green)}
+.savedSelect{display:flex;align-items:center;gap:8px;font-weight:750}
+.savedSelect input{width:20px;height:20px;accent-color:var(--green)}
+.compareWrap{border:1px solid #dce9df;border-radius:14px;background:linear-gradient(#f7fbf8,#eef6f0);overflow:hidden}
+.compareOverlay{height:390px}
+.compareGrid{display:grid;grid-template-columns:1fr;gap:10px}
+.compareMini{border:1px solid #e1e9e3;border-radius:13px;padding:9px;background:#fff}
+.compareMini svg{height:245px;background:#f7fbf8;border-radius:10px;border:1px solid #e6eee8}
+.compareLegend{display:flex;gap:10px;flex-wrap:wrap;margin-top:9px;font-size:12px;color:var(--muted)}
+.legendDot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px}
+@media(min-width:650px){.compareGrid{grid-template-columns:1fr 1fr}.compareOverlay{height:470px}}
+
 </style>
 </head>
 <body>
 <div class="app">
-  <header class="top"><h1>🌾 Field Mapper v2</h1><div style="display:flex;gap:7px;align-items:center"><button class="tinybtn hidden" id="closeSavedViewBtn">✕ Close View</button><span class="pill" id="surveyState">Ready</span></div></header>
+  <header class="top"><h1>🌾 Field Mapper v3</h1><div style="display:flex;gap:7px;align-items:center"><button class="tinybtn hidden" id="closeSavedViewBtn">✕ Close View</button><span class="pill" id="surveyState">Ready</span></div></header>
 
   <section class="card">
     <h2>GPS</h2>
@@ -101,6 +115,24 @@ dialog{width:min(92vw,460px);border:0;border-radius:18px;padding:0;box-shadow:0 
     <h2>Saved Fields</h2>
     <div id="savedFields" class="muted">No saved fields.</div>
   </section>
+
+  <section class="card hidden" id="selectedFieldsCard">
+    <div class="row"><h2>Selected Fields View</h2><span class="pill" id="selectedCount">0 selected</span></div>
+
+    <div class="compareToolbar">
+      <button class="tinybtn active" id="overlayFieldsBtn">Inner / Outer</button>
+      <button class="tinybtn" id="sideFieldsBtn">Side by Side</button>
+      <button class="tinybtn" id="compareStraightBtn">Straight</button>
+      <button class="tinybtn" id="compareGpsBtn">GPS</button>
+      <button class="tinybtn active" id="compareBothBtn">Both</button>
+      <button class="tinybtn dangerText" id="clearSelectedBtn">Clear</button>
+    </div>
+
+    <div id="compareFieldsView"></div>
+    <div class="muted" style="margin-top:8px">
+      Inner / Outer keeps the fields at their real GPS positions. If smaller fields are inside the outer field, they appear inside it.
+    </div>
+  </section>
 </div>
 <div class="toastHost" id="toastHost"></div>
 
@@ -135,6 +167,8 @@ function closeThreshold(){
 }
 let watchId=null,current=null,points=[],boundaries=[{id:1,ended:false}],activeBoundary=1,finished=false;
 let undoStack=[],redoStack=[],selectedPointId=null,viewingSaved=false,preSavedView=null,previewMode="both";
+const selectedSavedFields=new Set();
+let compareLayout="overlay",compareMode="both";
 
 function snapshot(){return JSON.stringify({points,boundaries,activeBoundary,finished})}
 function restore(s){const x=JSON.parse(s);points=x.points;boundaries=x.boundaries;activeBoundary=x.activeBoundary;finished=x.finished;render()}
@@ -523,6 +557,118 @@ function savedOutlinePoints(f){
 
  return out;
 }
+
+function toggleSavedSelection(id,checked){
+ if(checked)selectedSavedFields.add(Number(id));
+ else selectedSavedFields.delete(Number(id));
+ renderSavedComparison();
+}
+function clearSavedSelection(){
+ selectedSavedFields.clear();
+ renderSaved();
+ renderSavedComparison();
+}
+function selectedSavedData(){
+ const ids=selectedSavedFields;
+ return getSaved().filter(f=>ids.has(Number(f.id)));
+}
+function fieldColor(i){
+ const colors=["#176b3a","#2463a8","#9a5a16","#7a3f91","#b33b3b","#237c7c","#6f6a22","#425a9a"];
+ return colors[i%colors.length];
+}
+function escapeAttr(v){return escapeHtml(v).replace(/"/g,"&quot;")}
+function svgForFields(fields,mode="both",singleScale=false){
+ if(!fields.length)return "";
+
+ const packs=fields.map(f=>({
+   field:f,
+   gps:f.points||[],
+   straight:savedOutlinePoints(f)
+ }));
+ const all=[];
+ packs.forEach(x=>{
+   const src=mode==="raw"?x.gps:(mode==="outline"?x.straight:[...x.gps,...x.straight]);
+   all.push(...src);
+ });
+ if(!all.length)return "";
+
+ const ref=all[0],lat0=rad(ref.latitude),lon0=rad(ref.longitude);
+ const metric=p=>({
+   x:R*(rad(p.longitude)-lon0)*Math.cos(lat0),
+   y:R*(rad(p.latitude)-lat0)
+ });
+ const mm=all.map(metric),xs=mm.map(v=>v.x),ys=mm.map(v=>v.y);
+ const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+ const w=600,h=400,pad=42,dx=Math.max(maxX-minX,1),dy=Math.max(maxY-minY,1);
+ const scale=Math.min((w-2*pad)/dx,(h-2*pad)/dy);
+ const q=p=>{
+   const m=metric(p);
+   return {
+     x:(m.x-(minX+maxX)/2)*scale+w/2,
+     y:h/2-(m.y-(minY+maxY)/2)*scale
+   };
+ };
+ const pts=ps=>ps.map(p=>{const v=q(p);return `${v.x.toFixed(1)},${v.y.toFixed(1)}`}).join(" ");
+
+ let body="";
+ packs.forEach((x,i)=>{
+   const c=fieldColor(i),gps=x.gps,straight=x.straight;
+   if((mode==="raw"||mode==="both")&&gps.length>=2){
+     body+=`<polygon points="${pts(gps)}" fill="none" stroke="${c}" stroke-opacity=".48" stroke-width="2.5" stroke-dasharray="3 7" stroke-linejoin="miter"/>`;
+   }
+   if((mode==="outline"||mode==="both")&&straight.length>=3){
+     body+=`<polygon points="${pts(straight)}" fill="${c}" fill-opacity=".10" stroke="${c}" stroke-width="4" stroke-linejoin="miter"/>`;
+   }else if((mode==="outline"||mode==="both")&&straight.length>=2){
+     body+=`<polyline points="${pts(straight)}" fill="none" stroke="${c}" stroke-width="4" stroke-linejoin="miter"/>`;
+   }
+
+   const labelSource=straight.length?straight:gps;
+   if(labelSource.length){
+     const ms=labelSource.map(metric);
+     const cx=ms.reduce((a,v)=>a+v.x,0)/ms.length;
+     const cy=ms.reduce((a,v)=>a+v.y,0)/ms.length;
+     const lp={latitude:ref.latitude+(cy/R)*180/Math.PI,
+               longitude:ref.longitude+(cx/(R*Math.cos(lat0)))*180/Math.PI};
+     const v=q(lp);
+     body+=`<text x="${v.x.toFixed(1)}" y="${v.y.toFixed(1)}" text-anchor="middle" font-size="15" font-weight="800" fill="${c}" stroke="white" stroke-width="4" paint-order="stroke">${escapeHtml(x.field.name)}</text>`;
+   }
+ });
+ return `<svg viewBox="0 0 600 400" aria-label="Selected saved fields comparison">${body}</svg>`;
+}
+function renderSavedComparison(){
+ const card=$("selectedFieldsCard"),view=$("compareFieldsView");
+ const fields=selectedSavedData();
+ if(!fields.length){
+   card.classList.add("hidden");
+   view.innerHTML="";
+   return;
+ }
+ card.classList.remove("hidden");
+ $("selectedCount").textContent=fields.length+" selected";
+
+ ["overlayFieldsBtn","sideFieldsBtn","compareStraightBtn","compareGpsBtn","compareBothBtn"].forEach(id=>$(id)?.classList.remove("active"));
+ $(compareLayout==="overlay"?"overlayFieldsBtn":"sideFieldsBtn")?.classList.add("active");
+ $({outline:"compareStraightBtn",raw:"compareGpsBtn",both:"compareBothBtn"}[compareMode])?.classList.add("active");
+
+ if(compareLayout==="overlay"){
+   const ranked=[...fields].sort((a,b)=>polygonArea(savedOutlinePoints(b))-polygonArea(savedOutlinePoints(a)));
+   const legend=ranked.map((f,i)=>{
+     const role=i===0?"Outer":"Inner "+i;
+     return `<span><i class="legendDot" style="background:${fieldColor(i)}"></i><b>${escapeHtml(f.name)}</b> · ${role}</span>`;
+   }).join("");
+   view.innerHTML=`<div class="compareWrap compareOverlay">${svgForFields(ranked,compareMode)}</div><div class="compareLegend">${legend}</div>`;
+ }else{
+   view.innerHTML=`<div class="compareGrid">${fields.map((f,i)=>{
+     const st=savedOutlinePoints(f),gps=f.points||[];
+     const sa=polygonArea(st),ga=polygonArea(gps);
+     return `<div class="compareMini">
+       <div class="row"><b>${escapeHtml(f.name)}</b><span class="muted">${compareMode==="outline"?"Straight":compareMode==="raw"?"GPS":"Both"}</span></div>
+       ${svgForFields([f],compareMode)}
+       <div class="muted" style="margin-top:7px">Straight ${(sa/ACRE).toFixed(4)} ac · GPS ${(ga/ACRE).toFixed(4)} ac</div>
+     </div>`;
+   }).join("")}</div>`;
+ }
+}
 function renderSaved(){
  const arr=getSaved();
  $("savedFields").innerHTML=arr.length?arr.map(f=>{
@@ -531,9 +677,11 @@ function renderSaved(){
    const straightPer=perimeterValue(straight,straight.length>=3),gpsPer=perimeterValue(fp,fp.length>=3);
    const straightClose=straight.length>=3?hav(straight.at(-1),straight[0]):0;
    const gpsClose=fp.length>=3?hav(fp.at(-1),fp[0]):0;
+   const checked=selectedSavedFields.has(Number(f.id))?"checked":"";
    return `<div class="savedField">
      <div class="row">
-       <span><b>${escapeHtml(f.name)}</b><br><span class="muted">${new Date(f.date).toLocaleString()} · ${fp.length} GPS readings</span></span>
+       <label class="savedSelect"><input type="checkbox" ${checked} onchange="toggleSavedSelection(${f.id},this.checked)"> Select</label>
+       <span style="text-align:right"><b>${escapeHtml(f.name)}</b><br><span class="muted">${new Date(f.date).toLocaleString()} · ${fp.length} GPS readings</span></span>
      </div>
 
      <div style="margin-top:10px;padding:10px;border:1px solid #e3eae5;border-radius:10px">
@@ -554,6 +702,11 @@ function renderSaved(){
      </div>
    </div>`;
  }).join(""):"No saved fields.";
+
+ // Remove selections for fields that no longer exist.
+ const valid=new Set(arr.map(f=>Number(f.id)));
+ [...selectedSavedFields].forEach(id=>{if(!valid.has(id))selectedSavedFields.delete(id)});
+ renderSavedComparison();
 }
 function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]))}
 function toast(s,type="success"){const host=$("toastHost"),e=document.createElement("div");e.className="toast "+type;e.textContent=s;host.appendChild(e);setTimeout(()=>e.remove(),2600)}
@@ -561,6 +714,12 @@ function msg(s){const e=$("message");e.textContent=s;e.classList.remove("hidden"
 const openBoundaries=new Set([1]);
 function toggleBoundary(id){openBoundaries.has(id)?openBoundaries.delete(id):openBoundaries.add(id);render()}
 
+$("overlayFieldsBtn").onclick=()=>{compareLayout="overlay";renderSavedComparison();toast("Inner / Outer view","info")};
+$("sideFieldsBtn").onclick=()=>{compareLayout="side";renderSavedComparison();toast("Side by side view","info")};
+$("compareStraightBtn").onclick=()=>{compareMode="outline";renderSavedComparison()};
+$("compareGpsBtn").onclick=()=>{compareMode="raw";renderSavedComparison()};
+$("compareBothBtn").onclick=()=>{compareMode="both";renderSavedComparison()};
+$("clearSelectedBtn").onclick=clearSavedSelection;
 $("outlineViewBtn").onclick=()=>{previewMode="outline";render();toast("Straight view","info")};
 $("rawViewBtn").onclick=()=>{previewMode="raw";render();toast("GPS dotted view","info")};
 $("bothViewBtn").onclick=()=>{previewMode="both";render();toast("Both views","info")};
