@@ -54,6 +54,11 @@ dialog{width:min(92vw,460px);border:0;border-radius:18px;padding:0;box-shadow:0 
 
   <section class="card">
     <div class="row"><h2>Field Preview</h2><span class="muted" id="boundaryNow">Boundary 1</span></div>
+    <div class="row" style="gap:8px;margin:8px 0 12px">
+      <button class="tinybtn" id="outlineViewBtn">Boundary View</button>
+      <button class="tinybtn" id="rawViewBtn">GPS View</button>
+      <button class="tinybtn" id="bothViewBtn">Both</button>
+    </div>
     <div class="previewWrap">
       <svg id="fieldSvg" viewBox="0 0 600 400" aria-label="Field preview"></svg>
       <div class="empty" id="emptyPreview">Press START, then ADD POINT at field boundary points.</div>
@@ -62,7 +67,7 @@ dialog{width:min(92vw,460px);border:0;border-radius:18px;padding:0;box-shadow:0 
   </section>
 
   <section class="card">
-    <h2>Measurements</h2>
+    <div class="row"><h2>Measurements</h2><span class="pill" id="measurementMode">Both views</span></div>
     <div class="stats">
       <div class="metric"><small>Current boundary</small><b id="currentLength">0.00 m</b></div>
       <div class="metric"><small>Perimeter</small><b id="perimeter">0.00 m</b></div>
@@ -129,7 +134,7 @@ function closeThreshold(){
  return Math.max(AUTO_CLOSE_MIN_METERS,firstAcc+lastAcc);
 }
 let watchId=null,current=null,points=[],boundaries=[{id:1,ended:false}],activeBoundary=1,finished=false;
-let undoStack=[],redoStack=[],selectedPointId=null,viewingSaved=false,preSavedView=null;
+let undoStack=[],redoStack=[],selectedPointId=null,viewingSaved=false,preSavedView=null,previewMode="both";
 
 function snapshot(){return JSON.stringify({points,boundaries,activeBoundary,finished})}
 function restore(s){const x=JSON.parse(s);points=x.points;boundaries=x.boundaries;activeBoundary=x.activeBoundary;finished=x.finished;render()}
@@ -146,6 +151,24 @@ function localXY(ps){
 }
 function polygonArea(ps){if(ps.length<3)return 0;const xy=localXY(ps);let s=0;for(let i=0;i<xy.length;i++){let j=(i+1)%xy.length;s+=xy[i].x*xy[j].y-xy[j].x*xy[i].y}return Math.abs(s)/2}
 function perimeterValue(ps,close=finished){if(ps.length<2)return 0;let s=0;for(let i=1;i<ps.length;i++)s+=hav(ps[i-1],ps[i]);if(close&&ps.length>2)s+=hav(ps.at(-1),ps[0]);return s}
+
+/* Final field geometry:
+   - first saved point = field start
+   - each boundary contributes only its END point
+   - intermediate GPS readings stay stored, but do not bend the outline */
+function outlinePoints(){
+ const out=[];
+ const first=points[0];
+ if(!first)return out;
+ out.push(first);
+ boundaries.forEach(b=>{
+   const own=points.filter(p=>p.boundaryId===b.id);
+   if(!own.length)return;
+   const end=own.at(-1);
+   if(out.at(-1)?.id!==end.id)out.push(end);
+ });
+ return out;
+}
 function boundaryDisplayPoints(id){
  const own=points.filter(p=>p.boundaryId===id);
  if(id===boundaries[0]?.id)return own;
@@ -158,10 +181,7 @@ function boundaryDisplayPoints(id){
 function boundaryLength(id){
  const bp=boundaryDisplayPoints(id);
  if(bp.length<2)return 0;
- let s=0;for(let i=1;i<bp.length;i++)s+=hav(bp[i-1],bp[i]);
- const isLast=id===boundaries.at(-1)?.id;
- if(finished&&isLast&&points.length>=3)s+=hav(points.at(-1),points[0]);
- return s;
+ return hav(bp[0],bp.at(-1));
 }
 
 function startGPS(){
@@ -222,7 +242,7 @@ function deleteBoundary(id){
 }
 function completeField(fromAutoClose=false){
  if(points.length<3)return msg("At least 3 points are required.");
- if(polygonArea(points)<0.01)return msg("The saved points do not form a valid field area.");
+ if(polygonArea(outlinePoints())<0.01)return msg("The boundary start/end points do not form a valid field area.");
  const lastNo=points.length;
  commit();
  const cur=boundaries.find(b=>b.id===activeBoundary);if(cur)cur.ended=true;
@@ -232,14 +252,15 @@ function completeField(fromAutoClose=false){
 }
 function finish(){
  if(points.length<3)return msg("At least 3 points are required.");
- if(polygonArea(points)<0.01)return msg("The saved points do not form a valid field area.");
+ if(polygonArea(outlinePoints())<0.01)return msg("The boundary start/end points do not form a valid field area.");
  const closeDistance=hav(points.at(-1),points[0]),lastNo=points.length;
  if(!confirm(`Close the field now?\n\nP${lastNo} will connect to P1.\nClosing distance: ${closeDistance.toFixed(2)} m\n\nComplete the field?`))return;
  completeField(false);
 }
 function saveField(){
  const name=$("fieldName").value.trim()||"Field "+new Date().toLocaleString();
- const data={id:Date.now(),name,date:new Date().toISOString(),points:JSON.parse(JSON.stringify(points)),boundaries:JSON.parse(JSON.stringify(boundaries)),area:polygonArea(points),perimeter:perimeterValue(points,true)};
+ const shape=outlinePoints();
+ const data={id:Date.now(),name,date:new Date().toISOString(),points:JSON.parse(JSON.stringify(points)),boundaries:JSON.parse(JSON.stringify(boundaries)),area:polygonArea(shape),perimeter:perimeterValue(shape,true)};
  const arr=getSaved();arr.unshift(data);localStorage.setItem("fieldMapperSurveys",JSON.stringify(arr));$("saveDialog").close();renderSaved();toast("Field saved successfully");
 }
 function getSaved(){try{return JSON.parse(localStorage.getItem("fieldMapperSurveys")||"[]")}catch{return[]}}
@@ -277,34 +298,89 @@ function replacePoint(){
  const i=points.findIndex(p=>p.id===selectedPointId);if(i<0)return;commit();points[i]={...points[i],latitude:current.latitude,longitude:current.longitude,accuracy:current.accuracy,timestamp:current.timestamp};$("pointDialog").close();render();toast("Point replaced successfully");
 }
 function draw(){
- const svg=$("fieldSvg");svg.innerHTML="";$("emptyPreview").classList.toggle("hidden",points.length>0);if(!points.length)return;
- const xy=localXY(points),xs=xy.map(p=>p.x),ys=xy.map(p=>p.y),minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
- const pad=55,w=600,h=400,dx=Math.max(maxX-minX,1),dy=Math.max(maxY-minY,1),scale=Math.min((w-2*pad)/dx,(h-2*pad)/dy);
- const q=xy.map(p=>({x:(p.x-(minX+maxX)/2)*scale+w/2,y:h/2-(p.y-(minY+maxY)/2)*scale}));
+ const svg=$("fieldSvg");svg.innerHTML="";
+ const shape=outlinePoints(),raw=points;
+ const source=previewMode==="raw"?raw:(previewMode==="outline"?shape:[...raw,...shape]);
+ $("emptyPreview").classList.toggle("hidden",source.length>0);
+ if(!source.length)return;
+
+ const allXY=localXY(source),xs=allXY.map(p=>p.x),ys=allXY.map(p=>p.y);
+ const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+ const pad=55,w=600,h=400,dx=Math.max(maxX-minX,1),dy=Math.max(maxY-minY,1);
+ const scale=Math.min((w-2*pad)/dx,(h-2*pad)/dy);
+ const lat0=rad(source[0].latitude),lon0=rad(source[0].longitude);
+ const project=p=>{
+   const x=R*(rad(p.longitude)-lon0)*Math.cos(lat0),y=R*(rad(p.latitude)-rad(source[0].latitude));
+   return {x:(x-(minX+maxX)/2)*scale+w/2,y:h/2-(y-(minY+maxY)/2)*scale};
+ };
  const ns="http://www.w3.org/2000/svg";
- if(q.length>1){const pl=document.createElementNS(ns,finished?"polygon":"polyline");pl.setAttribute("points",q.map(p=>`${p.x},${p.y}`).join(" "));pl.setAttribute("fill",finished?"rgba(23,107,58,.13)":"none");pl.setAttribute("stroke","#176b3a");pl.setAttribute("stroke-width","4");pl.setAttribute("stroke-linejoin","round");svg.appendChild(pl)}
- if(!finished&&points.length>=3){
-   const d=hav(points.at(-1),points[0]),threshold=closeThreshold();
-   const line=document.createElementNS(ns,"line");
-   line.setAttribute("x1",q.at(-1).x);line.setAttribute("y1",q.at(-1).y);line.setAttribute("x2",q[0].x);line.setAttribute("y2",q[0].y);
-   line.setAttribute("stroke",d<=threshold?"#176b3a":"#8a978e");
-   line.setAttribute("stroke-width",d<=threshold?"4":"2");
-   line.setAttribute("stroke-dasharray","8 7");svg.appendChild(line);
+
+ function pathFor(ps,stroke,width,dash="",fill="none"){
+   if(ps.length<2)return;
+   const q=ps.map(project),el=document.createElementNS(ns,finished&&ps===shape?"polygon":"polyline");
+   el.setAttribute("points",q.map(v=>`${v.x},${v.y}`).join(" "));
+   el.setAttribute("fill",fill);el.setAttribute("stroke",stroke);el.setAttribute("stroke-width",width);
+   el.setAttribute("stroke-linejoin","round");el.setAttribute("stroke-linecap","round");
+   if(dash)el.setAttribute("stroke-dasharray",dash);svg.appendChild(el);
  }
- q.forEach((v,i)=>{const g=document.createElementNS(ns,"g");g.style.cursor="pointer";g.onclick=()=>openPoint(points[i].id);const c=document.createElementNS(ns,"circle");c.setAttribute("cx",v.x);c.setAttribute("cy",v.y);c.setAttribute("r","8");c.setAttribute("fill","#176b3a");c.setAttribute("stroke","white");c.setAttribute("stroke-width","3");const t=document.createElementNS(ns,"text");t.setAttribute("x",v.x+11);t.setAttribute("y",v.y-11);t.setAttribute("font-size","16");t.setAttribute("font-weight","700");t.textContent="P"+(i+1);g.append(c,t);svg.appendChild(g)});
+
+ // Raw GPS track: thin dashed line + small GPS dots.
+ if(previewMode==="raw"||previewMode==="both"){
+   pathFor(raw,"#7b8780","2","6 6");
+   raw.forEach((p,i)=>{
+     const v=project(p),g=document.createElementNS(ns,"g");g.style.cursor="pointer";g.onclick=()=>openPoint(p.id);
+     const c=document.createElementNS(ns,"circle");c.setAttribute("cx",v.x);c.setAttribute("cy",v.y);c.setAttribute("r","5");c.setAttribute("fill","#7b8780");c.setAttribute("stroke","white");c.setAttribute("stroke-width","2");
+     const t=document.createElementNS(ns,"text");t.setAttribute("x",v.x+8);t.setAttribute("y",v.y-8);t.setAttribute("font-size","12");t.textContent="P"+(i+1);
+     g.append(c,t);svg.appendChild(g);
+   });
+ }
+
+ // Boundary endpoint outline: thick solid green line.
+ if(previewMode==="outline"||previewMode==="both"){
+   pathFor(shape,"#176b3a","5","",finished?"rgba(23,107,58,.13)":"none");
+   if(!finished&&shape.length>=3){
+     const a=project(shape.at(-1)),b=project(shape[0]),d=hav(shape.at(-1),shape[0]),threshold=closeThreshold();
+     const line=document.createElementNS(ns,"line");
+     line.setAttribute("x1",a.x);line.setAttribute("y1",a.y);line.setAttribute("x2",b.x);line.setAttribute("y2",b.y);
+     line.setAttribute("stroke",d<=threshold?"#176b3a":"#8a978e");line.setAttribute("stroke-width","3");line.setAttribute("stroke-dasharray","8 7");svg.appendChild(line);
+   }
+   shape.forEach(p=>{
+     const v=project(p),n=points.indexOf(p)+1,g=document.createElementNS(ns,"g");g.style.cursor="pointer";g.onclick=()=>openPoint(p.id);
+     const c=document.createElementNS(ns,"circle");c.setAttribute("cx",v.x);c.setAttribute("cy",v.y);c.setAttribute("r","8");c.setAttribute("fill","#176b3a");c.setAttribute("stroke","white");c.setAttribute("stroke-width","3");
+     const t=document.createElementNS(ns,"text");t.setAttribute("x",v.x+11);t.setAttribute("y",v.y-11);t.setAttribute("font-size","16");t.setAttribute("font-weight","700");t.textContent="P"+n;
+     g.append(c,t);svg.appendChild(g);
+   });
+ }
 }
 function render(){
  $("pointCount").textContent=points.length;$("boundaryNow").textContent="Boundary "+activeBoundary;
- const a=polygonArea(points),per=perimeterValue(points,finished);
+ const shape=outlinePoints();
+ const rawArea=polygonArea(points),outlineArea=polygonArea(shape);
+ const rawPer=perimeterValue(points,finished),outlinePer=perimeterValue(shape,finished);
+ const a=previewMode==="raw"?rawArea:outlineArea;
+ const per=previewMode==="raw"?rawPer:outlinePer;
  const hint=$("closeHint");
  if(!finished&&points.length>=3){
-   const d=hav(points.at(-1),points[0]),t=closeThreshold();
+   const shapeNow=outlinePoints(),d=hav(shapeNow.at(-1),shapeNow[0]),t=closeThreshold();
    hint.textContent=d<=t
      ? `Ready to close: P${points.length} is ${d.toFixed(2)} m from P1. Press BOUNDARY ENDED to complete the field.`
      : `Closing distance: P${points.length} → P1 = ${d.toFixed(2)} m.`;
    hint.classList.remove("hidden");
  }else hint.classList.add("hidden");
- $("currentLength").textContent=boundaryLength(activeBoundary).toFixed(2)+" m";$("perimeter").textContent=per.toFixed(2)+" m";$("areaM2").textContent=a.toFixed(2)+" m²";$("areaAcre").textContent=(a/ACRE).toFixed(4)+" acre";$("extraArea").textContent=(a/CENT).toFixed(2)+" cents · "+(a/10000).toFixed(4)+" ha";
+ $("currentLength").textContent=boundaryLength(activeBoundary).toFixed(2)+" m";
+ if(previewMode==="both"){
+   $("measurementMode").textContent="Both views";
+   $("perimeter").innerHTML=`Boundary ${outlinePer.toFixed(2)} m<br><span class="muted" style="font-size:13px">GPS ${rawPer.toFixed(2)} m</span>`;
+   $("areaM2").innerHTML=`Boundary ${outlineArea.toFixed(2)} m²<br><span class="muted" style="font-size:13px">GPS ${rawArea.toFixed(2)} m²</span>`;
+   $("areaAcre").innerHTML=`Boundary ${(outlineArea/ACRE).toFixed(4)} ac<br><span class="muted" style="font-size:13px">GPS ${(rawArea/ACRE).toFixed(4)} ac</span>`;
+   $("extraArea").textContent=`Boundary ${(outlineArea/CENT).toFixed(2)} cents · ${(outlineArea/10000).toFixed(4)} ha | GPS ${(rawArea/CENT).toFixed(2)} cents · ${(rawArea/10000).toFixed(4)} ha`;
+ }else{
+   $("measurementMode").textContent=previewMode==="raw"?"GPS view":"Boundary view";
+   $("perimeter").textContent=per.toFixed(2)+" m";
+   $("areaM2").textContent=a.toFixed(2)+" m²";
+   $("areaAcre").textContent=(a/ACRE).toFixed(4)+" acre";
+   $("extraArea").textContent=(a/CENT).toFixed(2)+" cents · "+(a/10000).toFixed(4)+" ha";
+ }
  $("undoBtn").disabled=viewingSaved||!undoStack.length;$("redoBtn").disabled=viewingSaved||!redoStack.length;$("finishBtn").disabled=viewingSaved||points.length<3||finished;$("endBoundaryBtn").disabled=viewingSaved||finished||!points.some(p=>p.boundaryId===activeBoundary);$("addBoundaryBtn").disabled=viewingSaved||finished||!boundaries.find(b=>b.id===activeBoundary)?.ended;
  $("startBtn").disabled=viewingSaved;$("stopGpsBtn").disabled=viewingSaved;
  $("addPointBtn").disabled=viewingSaved||finished||!current;
@@ -328,7 +404,7 @@ function render(){
      <span>${boundaryLength(b.id).toFixed(2)} m</span>
    </button>
    <div class="boundaryBody">
-     <div class="row"><b>${bp.length} point${bp.length===1?"":"s"} on path</b><span class="muted">${b.ended?"Completed":"Recording"}</span></div>
+     <div class="row"><b>${bp.length} GPS reading${bp.length===1?"":"s"}</b><span class="muted">${b.ended?"Completed":"Recording"}</span></div>
      ${pointRows}
      ${viewingSaved?"":`<div style="margin-top:10px"><button class="tinybtn dangerText" onclick="event.stopPropagation();deleteBoundary(${b.id})">🗑 Delete Boundary</button></div>`}
    </div>
@@ -346,6 +422,9 @@ function msg(s){const e=$("message");e.textContent=s;e.classList.remove("hidden"
 const openBoundaries=new Set([1]);
 function toggleBoundary(id){openBoundaries.has(id)?openBoundaries.delete(id):openBoundaries.add(id);render()}
 
+$("outlineViewBtn").onclick=()=>{previewMode="outline";render();toast("Boundary view measurements","info")};
+$("rawViewBtn").onclick=()=>{previewMode="raw";render();toast("GPS view measurements","info")};
+$("bothViewBtn").onclick=()=>{previewMode="both";render();toast("Both measurements","info")};
 $("closeSavedViewBtn").onclick=closeSavedView;$("startBtn").onclick=startGPS;$("stopGpsBtn").onclick=stopGPS;$("addPointBtn").onclick=addPoint;$("undoBtn").onclick=undo;$("redoBtn").onclick=redo;$("endBoundaryBtn").onclick=endBoundary;$("addBoundaryBtn").onclick=addBoundary;$("finishBtn").onclick=finish;$("saveFieldBtn").onclick=saveField;$("deletePointBtn").onclick=deletePoint;$("replacePointBtn").onclick=replacePoint;
 render();
 </script>
