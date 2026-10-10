@@ -184,6 +184,25 @@ function addBoundary(){
  if(!confirm(`Start Boundary ${next}?\n\nP${points.length}, the last point of Boundary ${activeBoundary}, will automatically become the starting point of Boundary ${next}.`))return;
  commit();activeBoundary=next;boundaries.push({id:activeBoundary,ended:false});openBoundaries.add(activeBoundary);render();toast("Boundary "+activeBoundary+" started from P"+points.length);
 }
+function deleteBoundary(id){
+ if(viewingSaved)return;
+ const b=boundaries.find(x=>x.id===id);if(!b)return;
+ const bp=points.filter(p=>p.boundaryId===id);
+ if(!confirm(`Delete Boundary ${id}?\n\nThis will also delete ${bp.length} saved point${bp.length===1?"":"s"} from this boundary.`))return;
+ commit();
+ points=points.filter(p=>p.boundaryId!==id);
+ boundaries=boundaries.filter(x=>x.id!==id);
+ openBoundaries.delete(id);
+ if(!boundaries.length){
+   boundaries=[{id:1,ended:false}];activeBoundary=1;openBoundaries.add(1);
+ }else{
+   activeBoundary=boundaries.at(-1).id;
+   const active=boundaries.find(x=>x.id===activeBoundary);
+   if(active)active.ended=false;
+ }
+ points.forEach((p,i)=>p.sequenceNumber=i+1);
+ render();toast("Boundary "+id+" deleted successfully");
+}
 function finish(){
  if(points.length<3)return msg("At least 3 points are required.");
  if(polygonArea(points)<0.01)return msg("The saved points do not form a valid field area.");
@@ -272,6 +291,7 @@ function render(){
    <div class="boundaryBody">
      <div class="row"><b>${bp.length} point${bp.length===1?"":"s"} on path</b><span class="muted">${b.ended?"Completed":"Recording"}</span></div>
      ${pointRows}
+     ${viewingSaved?"":`<div style="margin-top:10px"><button class="tinybtn dangerText" onclick="event.stopPropagation();deleteBoundary(${b.id})">🗑 Delete Boundary</button></div>`}
    </div>
  </div>`;
 }).join("")||"No boundaries recorded.";
