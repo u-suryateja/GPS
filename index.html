@@ -22,6 +22,17 @@ input{width:100%;border:1px solid #ccd8cf;border-radius:11px;padding:11px;backgr
 dialog{width:min(92vw,460px);border:0;border-radius:18px;padding:0;box-shadow:0 20px 60px #0005}dialog::backdrop{background:#0007}.modal{padding:18px}.modal h3{margin:0 0 12px}.modal .buttons{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
 .notice{padding:10px;border-radius:11px;background:#fff5df;color:#725000;font-size:13px;margin-top:10px}
 .hidden{display:none!important}
+
+.toastHost{position:fixed;left:50%;bottom:max(18px,env(safe-area-inset-bottom));transform:translateX(-50%);z-index:9999;width:min(92vw,430px);pointer-events:none}
+.toast{background:#173c27;color:#fff;padding:13px 15px;border-radius:13px;box-shadow:0 10px 30px #0004;margin-top:8px;font-weight:700;animation:toastIn .2s ease}
+.toast.error{background:#8f251d}.toast.info{background:#33463a}
+@keyframes toastIn{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+.boundaryBox{border:1px solid #e3eae5;border-radius:12px;margin:8px 0;overflow:hidden}
+.boundaryHead{width:100%;border:0;background:#f7faf8;padding:12px;display:flex;align-items:center;justify-content:space-between;text-align:left;color:var(--text);font-weight:750}
+.boundaryArrow{display:inline-block;margin-right:8px;transition:transform .18s ease}.boundaryBox.open .boundaryArrow{transform:rotate(90deg)}
+.boundaryBody{display:none;padding:10px 12px}.boundaryBox.open .boundaryBody{display:block}
+.boundaryPoints{margin-top:7px;color:var(--muted);font-size:12px;line-height:1.55}
+
 @media(min-width:650px){.app{padding-top:20px}.gpsgrid{grid-template-columns:repeat(4,1fr)}.stats{grid-template-columns:repeat(4,1fr)}.previewWrap{height:430px}}
 </style>
 </head>
@@ -89,6 +100,7 @@ dialog{width:min(92vw,460px);border:0;border-radius:18px;padding:0;box-shadow:0 
     <div id="savedFields" class="muted">No saved fields.</div>
   </section>
 </div>
+<div class="toastHost" id="toastHost"></div>
 
 <dialog id="pointDialog"><div class="modal">
   <h3 id="pdTitle">Point</h3>
@@ -118,8 +130,8 @@ let undoStack=[],redoStack=[],selectedPointId=null;
 function snapshot(){return JSON.stringify({points,boundaries,activeBoundary,finished})}
 function restore(s){const x=JSON.parse(s);points=x.points;boundaries=x.boundaries;activeBoundary=x.activeBoundary;finished=x.finished;render()}
 function commit(){undoStack.push(snapshot());if(undoStack.length>100)undoStack.shift();redoStack=[]}
-function undo(){if(!undoStack.length)return;redoStack.push(snapshot());restore(undoStack.pop())}
-function redo(){if(!redoStack.length)return;undoStack.push(snapshot());restore(redoStack.pop())}
+function undo(){if(!undoStack.length)return;redoStack.push(snapshot());restore(undoStack.pop());toast("Undo successful","info")}
+function redo(){if(!redoStack.length)return;undoStack.push(snapshot());restore(redoStack.pop());toast("Redo successful","info")}
 
 function rad(x){return x*Math.PI/180}
 function hav(a,b){const dLat=rad(b.latitude-a.latitude),dLon=rad(b.longitude-a.longitude),la1=rad(a.latitude),la2=rad(b.latitude);const h=Math.sin(dLat/2)**2+Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)**2;return 2*R*Math.asin(Math.sqrt(h))}
@@ -136,6 +148,7 @@ function startGPS(){
  if(!navigator.geolocation){msg("Geolocation is not supported by this browser.");return}
  if(watchId!==null)return;
  $("gpsStatus").textContent="Finding GPS…";$("surveyState").textContent="Surveying";
+ toast("GPS tracking started","info");
  watchId=navigator.geolocation.watchPosition(pos=>{
    current={latitude:pos.coords.latitude,longitude:pos.coords.longitude,accuracy:pos.coords.accuracy,timestamp:pos.timestamp};
    $("lat").textContent=current.latitude.toFixed(7);$("lon").textContent=current.longitude.toFixed(7);$("accuracy").textContent="±"+current.accuracy.toFixed(1)+" m";
@@ -145,19 +158,19 @@ function startGPS(){
  },err=>msg("GPS error: "+err.message),{enableHighAccuracy:true,maximumAge:0,timeout:15000});
  render();
 }
-function stopGPS(){if(watchId!==null){navigator.geolocation.clearWatch(watchId);watchId=null}$("surveyState").textContent=finished?"Finished":"GPS stopped";$("gpsStatus").textContent="GPS stopped";$("gpsDot").className="dot";render()}
+function stopGPS(){const wasRunning=watchId!==null;if(watchId!==null){navigator.geolocation.clearWatch(watchId);watchId=null}$("surveyState").textContent=finished?"Finished":"GPS stopped";$("gpsStatus").textContent="GPS stopped";$("gpsDot").className="dot";render();if(wasRunning)toast("GPS tracking stopped","info")}
 function addPoint(){
  if(!current||finished)return msg("Wait for a valid GPS position.");
- const save=()=>{commit();points.push({id:crypto.randomUUID?crypto.randomUUID():Date.now()+"-"+Math.random(),latitude:current.latitude,longitude:current.longitude,accuracy:current.accuracy,timestamp:current.timestamp,boundaryId:activeBoundary,sequenceNumber:points.length+1});render()};
+ const save=()=>{commit();points.push({id:crypto.randomUUID?crypto.randomUUID():Date.now()+"-"+Math.random(),latitude:current.latitude,longitude:current.longitude,accuracy:current.accuracy,timestamp:current.timestamp,boundaryId:activeBoundary,sequenceNumber:points.length+1});render();toast("Point P"+points.length+" added successfully")};
  if(current.accuracy>10&&!confirm(`Current GPS accuracy is ±${current.accuracy.toFixed(1)} m. Save anyway?`))return;save();
 }
 function endBoundary(){
  const bp=points.filter(p=>p.boundaryId===activeBoundary);if(!bp.length)return msg("Add at least one point to this boundary.");
- commit();boundaries.find(b=>b.id===activeBoundary).ended=true;render();
+ commit();boundaries.find(b=>b.id===activeBoundary).ended=true;render();toast("Boundary "+activeBoundary+" ended successfully");
 }
 function addBoundary(){
  const cur=boundaries.find(b=>b.id===activeBoundary);if(!cur?.ended)return msg("End the current boundary first.");
- commit();activeBoundary=Math.max(...boundaries.map(b=>b.id))+1;boundaries.push({id:activeBoundary,ended:false});render();
+ commit();activeBoundary=Math.max(...boundaries.map(b=>b.id))+1;boundaries.push({id:activeBoundary,ended:false});openBoundaries.add(activeBoundary);render();toast("Boundary "+activeBoundary+" added successfully");
 }
 function finish(){
  if(points.length<3)return msg("At least 3 points are required.");
@@ -168,11 +181,11 @@ function finish(){
 function saveField(){
  const name=$("fieldName").value.trim()||"Field "+new Date().toLocaleString();
  const data={id:Date.now(),name,date:new Date().toISOString(),points:JSON.parse(JSON.stringify(points)),boundaries:JSON.parse(JSON.stringify(boundaries)),area:polygonArea(points),perimeter:perimeterValue(points,true)};
- const arr=getSaved();arr.unshift(data);localStorage.setItem("fieldMapperSurveys",JSON.stringify(arr));$("saveDialog").close();renderSaved();msg("Field saved.");
+ const arr=getSaved();arr.unshift(data);localStorage.setItem("fieldMapperSurveys",JSON.stringify(arr));$("saveDialog").close();renderSaved();toast("Field saved successfully");
 }
 function getSaved(){try{return JSON.parse(localStorage.getItem("fieldMapperSurveys")||"[]")}catch{return[]}}
 function openSaved(id){const f=getSaved().find(x=>x.id===id);if(!f)return;commit();points=f.points;boundaries=f.boundaries?.length?f.boundaries:[{id:1,ended:true}];activeBoundary=boundaries.at(-1).id;finished=true;stopGPS();render();window.scrollTo({top:0,behavior:"smooth"})}
-function deleteSaved(id){if(!confirm("Delete this saved field?"))return;localStorage.setItem("fieldMapperSurveys",JSON.stringify(getSaved().filter(x=>x.id!==id)));renderSaved()}
+function deleteSaved(id){if(!confirm("Delete this saved field?"))return;localStorage.setItem("fieldMapperSurveys",JSON.stringify(getSaved().filter(x=>x.id!==id)));renderSaved();toast("Saved field deleted successfully")}
 
 function openPoint(id){
  const p=points.find(x=>x.id===id);if(!p)return;selectedPointId=id;
@@ -181,11 +194,11 @@ function openPoint(id){
  $("pointDialog").showModal();
 }
 function deletePoint(){
- const i=points.findIndex(p=>p.id===selectedPointId);if(i<0||!confirm("Delete this point?"))return;commit();points.splice(i,1);points.forEach((p,j)=>p.sequenceNumber=j+1);$("pointDialog").close();render();
+ const i=points.findIndex(p=>p.id===selectedPointId);if(i<0||!confirm("Delete this point?"))return;commit();points.splice(i,1);points.forEach((p,j)=>p.sequenceNumber=j+1);$("pointDialog").close();render();toast("Point deleted successfully");
 }
 function replacePoint(){
  if(!current)return msg("No current GPS position.");
- const i=points.findIndex(p=>p.id===selectedPointId);if(i<0)return;commit();points[i]={...points[i],latitude:current.latitude,longitude:current.longitude,accuracy:current.accuracy,timestamp:current.timestamp};$("pointDialog").close();render();
+ const i=points.findIndex(p=>p.id===selectedPointId);if(i<0)return;commit();points[i]={...points[i],latitude:current.latitude,longitude:current.longitude,accuracy:current.accuracy,timestamp:current.timestamp};$("pointDialog").close();render();toast("Point replaced successfully");
 }
 function draw(){
  const svg=$("fieldSvg");svg.innerHTML="";$("emptyPreview").classList.toggle("hidden",points.length>0);if(!points.length)return;
@@ -201,7 +214,7 @@ function render(){
  const a=polygonArea(points),per=perimeterValue(points,finished);$("currentLength").textContent=boundaryLength(activeBoundary).toFixed(2)+" m";$("perimeter").textContent=per.toFixed(2)+" m";$("areaM2").textContent=a.toFixed(2)+" m²";$("areaAcre").textContent=(a/ACRE).toFixed(4)+" acre";$("extraArea").textContent=(a/CENT).toFixed(2)+" cents · "+(a/10000).toFixed(4)+" ha";
  $("undoBtn").disabled=!undoStack.length;$("redoBtn").disabled=!redoStack.length;$("finishBtn").disabled=points.length<3||finished;$("endBoundaryBtn").disabled=finished||!points.some(p=>p.boundaryId===activeBoundary);$("addBoundaryBtn").disabled=finished||!boundaries.find(b=>b.id===activeBoundary)?.ended;
  if(current)$("addPointBtn").disabled=finished;
- $("boundaryList").innerHTML=boundaries.map(b=>`<div class="boundary row"><span><b>Boundary ${b.id}</b><br><span class="muted">${b.ended?"Ended":"Active"}</span></span><b>${boundaryLength(b.id).toFixed(2)} m</b></div>`).join("")||"No boundaries recorded.";
+ $("boundaryList").innerHTML=boundaries.map(b=>{const bp=points.filter(p=>p.boundaryId===b.id);const labels=bp.map(p=>"P"+(points.indexOf(p)+1)).join(" → ")||"No points yet";return `<div class="boundaryBox ${openBoundaries.has(b.id)?"open":""}"><button class="boundaryHead" onclick="toggleBoundary(${b.id})"><span><span class="boundaryArrow">▶</span>Boundary ${b.id} <span class="muted">· ${b.ended?"Ended":"Active"}</span></span><span>${boundaryLength(b.id).toFixed(2)} m</span></button><div class="boundaryBody"><b>${bp.length} point${bp.length===1?"":"s"}</b><div class="boundaryPoints">${labels}</div></div></div>`}).join("")||"No boundaries recorded.";
  $("pointList").innerHTML=points.length?points.map((p,i)=>`<div class="savedPoint row"><span><b>P${i+1}</b> · Boundary ${p.boundaryId}<br><span class="muted">${p.latitude.toFixed(6)}, ${p.longitude.toFixed(6)} · ±${p.accuracy.toFixed(1)} m</span></span><button class="tinybtn" onclick="openPoint('${p.id}')">View</button></div>`).join(""):"No points saved.";
  draw();renderSaved();
 }
@@ -209,7 +222,10 @@ function renderSaved(){
  const arr=getSaved();$("savedFields").innerHTML=arr.length?arr.map(f=>`<div class="savedField"><div class="row"><span><b>${escapeHtml(f.name)}</b><br><span class="muted">${new Date(f.date).toLocaleString()} · ${f.points.length} points</span></span><b>${(f.area/ACRE).toFixed(4)} ac</b></div><div class="row" style="margin-top:8px"><span class="muted">${f.perimeter.toFixed(2)} m perimeter</span><span><button class="tinybtn" onclick="openSaved(${f.id})">Open</button> <button class="tinybtn dangerText" onclick="deleteSaved(${f.id})">Delete</button></span></div></div>`).join(""):"No saved fields.";
 }
 function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]))}
-function msg(s){const e=$("message");e.textContent=s;e.classList.remove("hidden");clearTimeout(msg.t);msg.t=setTimeout(()=>e.classList.add("hidden"),4500)}
+function toast(s,type="success"){const host=$("toastHost"),e=document.createElement("div");e.className="toast "+type;e.textContent=s;host.appendChild(e);setTimeout(()=>e.remove(),2600)}
+function msg(s){const e=$("message");e.textContent=s;e.classList.remove("hidden");toast(s,"error");clearTimeout(msg.t);msg.t=setTimeout(()=>e.classList.add("hidden"),4500)}
+const openBoundaries=new Set([1]);
+function toggleBoundary(id){openBoundaries.has(id)?openBoundaries.delete(id):openBoundaries.add(id);render()}
 
 $("startBtn").onclick=startGPS;$("stopGpsBtn").onclick=stopGPS;$("addPointBtn").onclick=addPoint;$("undoBtn").onclick=undo;$("redoBtn").onclick=redo;$("endBoundaryBtn").onclick=endBoundary;$("addBoundaryBtn").onclick=addBoundary;$("finishBtn").onclick=finish;$("saveFieldBtn").onclick=saveField;$("deletePointBtn").onclick=deletePoint;$("replacePointBtn").onclick=replacePoint;
 render();
