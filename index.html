@@ -32,6 +32,7 @@ dialog{width:min(92vw,460px);border:0;border-radius:18px;padding:0;box-shadow:0 
 .boundaryArrow{display:inline-block;margin-right:8px;transition:transform .18s ease}.boundaryBox.open .boundaryArrow{transform:rotate(90deg)}
 .boundaryBody{display:none;padding:10px 12px}.boundaryBox.open .boundaryBody{display:block}
 .boundaryPoints{margin-top:7px;color:var(--muted);font-size:12px;line-height:1.55}
+.sharedTag{display:inline-block;margin-left:5px;padding:2px 6px;border-radius:99px;background:#eaf6ee;color:#176b3a;font-size:10px;font-weight:800}
 
 @media(min-width:650px){.app{padding-top:20px}.gpsgrid{grid-template-columns:repeat(4,1fr)}.stats{grid-template-columns:repeat(4,1fr)}.previewWrap{height:430px}}
 </style>
@@ -137,7 +138,20 @@ function localXY(ps){
 }
 function polygonArea(ps){if(ps.length<3)return 0;const xy=localXY(ps);let s=0;for(let i=0;i<xy.length;i++){let j=(i+1)%xy.length;s+=xy[i].x*xy[j].y-xy[j].x*xy[i].y}return Math.abs(s)/2}
 function perimeterValue(ps,close=finished){if(ps.length<2)return 0;let s=0;for(let i=1;i<ps.length;i++)s+=hav(ps[i-1],ps[i]);if(close&&ps.length>2)s+=hav(ps.at(-1),ps[0]);return s}
-function boundaryLength(id){const idx=points.filter(p=>p.boundaryId===id).map(p=>points.indexOf(p));if(!idx.length)return 0;let s=0;const first=idx[0];if(first>0)s+=hav(points[first-1],points[first]);for(let k=1;k<idx.length;k++)s+=hav(points[idx[k-1]],points[idx[k]]);return s}
+function boundaryDisplayPoints(id){
+ const own=points.filter(p=>p.boundaryId===id);
+ if(id===boundaries[0]?.id)return own;
+ const pos=boundaries.findIndex(b=>b.id===id);
+ if(pos<=0)return own;
+ const prevId=boundaries[pos-1].id;
+ const prev=points.filter(p=>p.boundaryId===prevId);
+ return prev.length?[prev.at(-1),...own]:own;
+}
+function boundaryLength(id){
+ const bp=boundaryDisplayPoints(id);
+ if(bp.length<2)return 0;
+ let s=0;for(let i=1;i<bp.length;i++)s+=hav(bp[i-1],bp[i]);return s;
+}
 
 function startGPS(){
  toast("START clicked — requesting GPS","info");
@@ -165,13 +179,22 @@ function endBoundary(){
 }
 function addBoundary(){
  const cur=boundaries.find(b=>b.id===activeBoundary);if(!cur?.ended)return msg("End the current boundary first.");
- commit();activeBoundary=Math.max(...boundaries.map(b=>b.id))+1;boundaries.push({id:activeBoundary,ended:false});openBoundaries.add(activeBoundary);render();toast("Boundary "+activeBoundary+" added successfully");
+ const last=points.at(-1);if(!last)return msg("Add a point before starting the next boundary.");
+ const next=Math.max(...boundaries.map(b=>b.id))+1;
+ if(!confirm(`Start Boundary ${next}?\n\nP${points.length}, the last point of Boundary ${activeBoundary}, will automatically become the starting point of Boundary ${next}.`))return;
+ commit();activeBoundary=next;boundaries.push({id:activeBoundary,ended:false});openBoundaries.add(activeBoundary);render();toast("Boundary "+activeBoundary+" started from P"+points.length);
 }
 function finish(){
  if(points.length<3)return msg("At least 3 points are required.");
  if(polygonArea(points)<0.01)return msg("The saved points do not form a valid field area.");
- if(!confirm("Finish and close this field boundary?"))return;
- commit();finished=true;stopGPS();render();$("fieldName").value="Field "+new Date().toLocaleDateString();$("saveDialog").showModal();
+ const closeDistance=hav(points.at(-1),points[0]);
+ const lastNo=points.length;
+ const text=`Close the field now?\n\nThe last point P${lastNo} will automatically connect to the first point P1.\nClosing distance: ${closeDistance.toFixed(2)} m\n\nThis will complete the field.`;
+ if(!confirm(text))return;
+ commit();
+ const cur=boundaries.find(b=>b.id===activeBoundary);if(cur)cur.ended=true;
+ finished=true;stopGPS();render();toast("Field closed: P"+lastNo+" → P1");
+ $("fieldName").value="Field "+new Date().toLocaleDateString();$("saveDialog").showModal();
 }
 function saveField(){
  const name=$("fieldName").value.trim()||"Field "+new Date().toLocaleString();
@@ -209,12 +232,14 @@ function render(){
  const a=polygonArea(points),per=perimeterValue(points,finished);$("currentLength").textContent=boundaryLength(activeBoundary).toFixed(2)+" m";$("perimeter").textContent=per.toFixed(2)+" m";$("areaM2").textContent=a.toFixed(2)+" m²";$("areaAcre").textContent=(a/ACRE).toFixed(4)+" acre";$("extraArea").textContent=(a/CENT).toFixed(2)+" cents · "+(a/10000).toFixed(4)+" ha";
  $("undoBtn").disabled=!undoStack.length;$("redoBtn").disabled=!redoStack.length;$("finishBtn").disabled=points.length<3||finished;$("endBoundaryBtn").disabled=finished||!points.some(p=>p.boundaryId===activeBoundary);$("addBoundaryBtn").disabled=finished||!boundaries.find(b=>b.id===activeBoundary)?.ended;
  if(current)$("addPointBtn").disabled=finished;
- $("boundaryList").innerHTML=boundaries.map(b=>{
- const bp=points.filter(p=>p.boundaryId===b.id);
- const pointRows=bp.length?bp.map(p=>{
+ $("boundaryList").innerHTML=boundaries.map((b,bi)=>{
+ const own=points.filter(p=>p.boundaryId===b.id);
+ const bp=boundaryDisplayPoints(b.id);
+ const pointRows=bp.length?bp.map((p,k)=>{
    const n=points.indexOf(p)+1;
+   const shared=bi>0&&k===0&&!own.includes(p);
    return `<div class="savedPoint row">
-     <span><b>P${n}</b><br>
+     <span><b>P${n}</b>${shared?'<span class="sharedTag">START FROM PREVIOUS</span>':''}<br>
        <span class="muted">${p.latitude.toFixed(7)}, ${p.longitude.toFixed(7)}</span><br>
        <span class="muted">Accuracy ±${p.accuracy.toFixed(1)} m · ${new Date(p.timestamp).toLocaleTimeString()}</span>
      </span>
@@ -227,7 +252,7 @@ function render(){
      <span>${boundaryLength(b.id).toFixed(2)} m</span>
    </button>
    <div class="boundaryBody">
-     <div class="row"><b>${bp.length} saved point${bp.length===1?"":"s"}</b><span class="muted">${b.ended?"Completed":"Recording"}</span></div>
+     <div class="row"><b>${bp.length} point${bp.length===1?"":"s"} on path</b><span class="muted">${b.ended?"Completed":"Recording"}</span></div>
      ${pointRows}
    </div>
  </div>`;
