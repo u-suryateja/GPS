@@ -53,7 +53,7 @@ dialog{width:min(92vw,460px);border:0;border-radius:18px;padding:0;box-shadow:0 
 </head>
 <body>
 <div class="app">
-  <header class="top"><h1>🌾 Field Mapper v3</h1><div style="display:flex;gap:7px;align-items:center"><button class="tinybtn hidden" id="closeSavedViewBtn">✕ Close View</button><span class="pill" id="surveyState">Ready</span></div></header>
+  <header class="top"><h1>🌾 Field Mapper v5</h1><div style="display:flex;gap:7px;align-items:center"><button class="tinybtn hidden" id="closeSavedViewBtn">✕ Close View</button><span class="pill" id="surveyState">Ready</span></div></header>
 
   <section class="card">
     <h2>GPS</h2>
@@ -669,6 +669,57 @@ function renderSavedComparison(){
    }).join("")}</div>`;
  }
 }
+
+function downloadSavedFieldJson(id){
+ const f=getSaved().find(x=>Number(x.id)===Number(id));
+ if(!f){toast("Saved field not found","info");return;}
+
+ const straight=savedOutlinePoints(f);
+ const gps=f.points||[];
+
+ const exportData={
+   version:1,
+   type:"field-mapper-saved-field",
+   exportedAt:new Date().toISOString(),
+   field:{
+     id:f.id,
+     name:f.name,
+     date:f.date,
+     points:f.points||[],
+     boundaries:f.boundaries||[],
+     measurements:{
+       straight:{
+         areaM2:polygonArea(straight),
+         areaAcres:polygonArea(straight)/ACRE,
+         areaCents:polygonArea(straight)/CENT,
+         areaHectares:polygonArea(straight)/10000,
+         perimeterM:perimeterValue(straight,straight.length>=3),
+         lastToFirstM:straight.length>=3?hav(straight.at(-1),straight[0]):0
+       },
+       gps:{
+         areaM2:polygonArea(gps),
+         areaAcres:polygonArea(gps)/ACRE,
+         areaCents:polygonArea(gps)/CENT,
+         areaHectares:polygonArea(gps)/10000,
+         perimeterM:perimeterValue(gps,gps.length>=3),
+         lastToFirstM:gps.length>=3?hav(gps.at(-1),gps[0]):0
+       }
+     }
+   }
+ };
+
+ const blob=new Blob([JSON.stringify(exportData,null,2)],{type:"application/json"});
+ const url=URL.createObjectURL(blob);
+ const a=document.createElement("a");
+ const safe=(f.name||"field").trim().replace(/[^a-z0-9_-]+/gi,"-").replace(/^-+|-+$/g,"")||"field";
+ a.href=url;
+ a.download=safe+".json";
+ document.body.appendChild(a);
+ a.click();
+ a.remove();
+ setTimeout(()=>URL.revokeObjectURL(url),1000);
+ toast("JSON downloaded","info");
+}
 function renderSaved(){
  const arr=getSaved();
  $("savedFields").innerHTML=arr.length?arr.map(f=>{
@@ -698,6 +749,7 @@ function renderSaved(){
 
      <div style="text-align:right;margin-top:10px">
        <button class="tinybtn" onclick="openSaved(${f.id})">Open</button>
+       <button class="tinybtn" onclick="downloadSavedFieldJson(${f.id})">Download JSON</button>
        <button class="tinybtn dangerText" onclick="deleteSaved(${f.id})">Delete</button>
      </div>
    </div>`;
