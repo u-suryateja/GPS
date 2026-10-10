@@ -122,7 +122,12 @@ dialog{width:min(92vw,460px);border:0;border-radius:18px;padding:0;box-shadow:0 
 const $=id=>document.getElementById(id);
 const R=6371008.8, ACRE=4046.8564224, CENT=40.468564224;
 const AUTO_CLOSE_MIN_METERS=5;
-function closeThreshold(){return Math.max(AUTO_CLOSE_MIN_METERS,current?.accuracy||0,points[0]?.accuracy||0)}
+function closeThreshold(){
+ if(!points.length)return AUTO_CLOSE_MIN_METERS;
+ const firstAcc=Number(points[0]?.accuracy)||0;
+ const lastAcc=Number(points.at(-1)?.accuracy)||0;
+ return Math.max(AUTO_CLOSE_MIN_METERS,firstAcc+lastAcc);
+}
 let watchId=null,current=null,points=[],boundaries=[{id:1,ended:false}],activeBoundary=1,finished=false;
 let undoStack=[],redoStack=[],selectedPointId=null,viewingSaved=false,preSavedView=null;
 
@@ -153,7 +158,10 @@ function boundaryDisplayPoints(id){
 function boundaryLength(id){
  const bp=boundaryDisplayPoints(id);
  if(bp.length<2)return 0;
- let s=0;for(let i=1;i<bp.length;i++)s+=hav(bp[i-1],bp[i]);return s;
+ let s=0;for(let i=1;i<bp.length;i++)s+=hav(bp[i-1],bp[i]);
+ const isLast=id===boundaries.at(-1)?.id;
+ if(finished&&isLast&&points.length>=3)s+=hav(points.at(-1),points[0]);
+ return s;
 }
 
 function startGPS(){
@@ -181,7 +189,7 @@ function endBoundary(){
  const closingDistance=points.length>=3?hav(points.at(-1),points[0]):Infinity;
  const threshold=closeThreshold();
  if(points.length>=3 && closingDistance<=threshold){
-   const ok=confirm(`You are back near the starting point P1.\n\nDistance from last point to P1: ${closingDistance.toFixed(2)} m\nClose tolerance: ${threshold.toFixed(2)} m\n\nClose the field automatically now?`);
+   const ok=confirm(`Final boundary is near P1.\n\nLast point P${points.length} → P1: ${closingDistance.toFixed(2)} m\nGPS-based close tolerance: ${threshold.toFixed(2)} m\n\nClose Boundary ${activeBoundary} to P1 and complete the field?`);
    if(ok){completeField(true);return;}
  }
  commit();boundaries.find(b=>b.id===activeBoundary).ended=true;render();toast("Boundary "+activeBoundary+" ended successfully");
@@ -277,11 +285,11 @@ function draw(){
  if(q.length>1){const pl=document.createElementNS(ns,finished?"polygon":"polyline");pl.setAttribute("points",q.map(p=>`${p.x},${p.y}`).join(" "));pl.setAttribute("fill",finished?"rgba(23,107,58,.13)":"none");pl.setAttribute("stroke","#176b3a");pl.setAttribute("stroke-width","4");pl.setAttribute("stroke-linejoin","round");svg.appendChild(pl)}
  if(!finished&&points.length>=3){
    const d=hav(points.at(-1),points[0]),threshold=closeThreshold();
-   if(d<=threshold){
-     const line=document.createElementNS(ns,"line");
-     line.setAttribute("x1",q.at(-1).x);line.setAttribute("y1",q.at(-1).y);line.setAttribute("x2",q[0].x);line.setAttribute("y2",q[0].y);
-     line.setAttribute("stroke","#176b3a");line.setAttribute("stroke-width","3");line.setAttribute("stroke-dasharray","8 7");svg.appendChild(line);
-   }
+   const line=document.createElementNS(ns,"line");
+   line.setAttribute("x1",q.at(-1).x);line.setAttribute("y1",q.at(-1).y);line.setAttribute("x2",q[0].x);line.setAttribute("y2",q[0].y);
+   line.setAttribute("stroke",d<=threshold?"#176b3a":"#8a978e");
+   line.setAttribute("stroke-width",d<=threshold?"4":"2");
+   line.setAttribute("stroke-dasharray","8 7");svg.appendChild(line);
  }
  q.forEach((v,i)=>{const g=document.createElementNS(ns,"g");g.style.cursor="pointer";g.onclick=()=>openPoint(points[i].id);const c=document.createElementNS(ns,"circle");c.setAttribute("cx",v.x);c.setAttribute("cy",v.y);c.setAttribute("r","8");c.setAttribute("fill","#176b3a");c.setAttribute("stroke","white");c.setAttribute("stroke-width","3");const t=document.createElementNS(ns,"text");t.setAttribute("x",v.x+11);t.setAttribute("y",v.y-11);t.setAttribute("font-size","16");t.setAttribute("font-weight","700");t.textContent="P"+(i+1);g.append(c,t);svg.appendChild(g)});
 }
@@ -291,8 +299,10 @@ function render(){
  const hint=$("closeHint");
  if(!finished&&points.length>=3){
    const d=hav(points.at(-1),points[0]),t=closeThreshold();
-   if(d<=t){hint.textContent=`Near starting point P1: ${d.toFixed(2)} m away. End the last boundary to close the field.`;hint.classList.remove("hidden")}
-   else hint.classList.add("hidden");
+   hint.textContent=d<=t
+     ? `Ready to close: P${points.length} is ${d.toFixed(2)} m from P1. Press BOUNDARY ENDED to complete the field.`
+     : `Closing distance: P${points.length} → P1 = ${d.toFixed(2)} m.`;
+   hint.classList.remove("hidden");
  }else hint.classList.add("hidden");
  $("currentLength").textContent=boundaryLength(activeBoundary).toFixed(2)+" m";$("perimeter").textContent=per.toFixed(2)+" m";$("areaM2").textContent=a.toFixed(2)+" m²";$("areaAcre").textContent=(a/ACRE).toFixed(4)+" acre";$("extraArea").textContent=(a/CENT).toFixed(2)+" cents · "+(a/10000).toFixed(4)+" ha";
  $("undoBtn").disabled=viewingSaved||!undoStack.length;$("redoBtn").disabled=viewingSaved||!redoStack.length;$("finishBtn").disabled=viewingSaved||points.length<3||finished;$("endBoundaryBtn").disabled=viewingSaved||finished||!points.some(p=>p.boundaryId===activeBoundary);$("addBoundaryBtn").disabled=viewingSaved||finished||!boundaries.find(b=>b.id===activeBoundary)?.ended;
