@@ -53,7 +53,7 @@ dialog{width:min(92vw,460px);border:0;border-radius:18px;padding:0;box-shadow:0 
 </head>
 <body>
 <div class="app">
-  <header class="top"><h1>🌾 Field Mapper v6</h1><div style="display:flex;gap:7px;align-items:center"><button class="tinybtn hidden" id="closeSavedViewBtn">✕ Close View</button><span class="pill" id="surveyState">Ready</span></div></header>
+  <header class="top"><h1>🌾 Field Mapper v7</h1><div style="display:flex;gap:7px;align-items:center"><button class="tinybtn hidden" id="closeSavedViewBtn">✕ Close View</button><span class="pill" id="surveyState">Ready</span></div></header>
 
   <section class="card">
     <h2>GPS</h2>
@@ -617,6 +617,52 @@ function distanceToPolygonEdge(p,poly){
  }
  return best;
 }
+
+function nearestPointOnSegmentXY(p,a,b){
+ const vx=b.x-a.x,vy=b.y-a.y,wx=p.x-a.x,wy=p.y-a.y;
+ const vv=vx*vx+vy*vy;
+ let t=vv?((wx*vx+wy*vy)/vv):0;
+ t=Math.max(0,Math.min(1,t));
+ return {x:a.x+t*vx,y:a.y+t*vy};
+}
+function nearestPointOnPolygonXY(p,poly){
+ let best=null,bestD=Infinity;
+ for(let i=0;i<poly.length;i++){
+   const q=nearestPointOnSegmentXY(p,poly[i],poly[(i+1)%poly.length]);
+   const d=Math.hypot(p.x-q.x,p.y-q.y);
+   if(d<bestD){best=q;bestD=d}
+ }
+ return {point:best,distance:bestD};
+}
+function correctedInnerStraight(outer,inner,project){
+ const op=savedOutlinePoints(outer),ip=savedOutlinePoints(inner);
+ if(op.length<3||ip.length<3)return ip;
+
+ const outerXY=op.map(project);
+ const tolerance=Math.max(relationTolerance(outer),relationTolerance(inner));
+
+ // Keep original coordinates when already inside.
+ // If a straight corner is only just outside (within GPS accuracy),
+ // place that DISPLAY corner on the nearest outer edge so the straight
+ // inner polygon cannot visibly cross the compound boundary.
+ return ip.map(p=>{
+   const m=project(p);
+   if(pointInPolygonXY(m,outerXY))return p;
+
+   const near=nearestPointOnPolygonXY(m,outerXY);
+   if(!near.point || near.distance>tolerance)return p;
+
+   // Convert the corrected local point back to latitude/longitude.
+   // project() uses the same local equirectangular reference for all selected fields.
+   const ref=op[0],lat0=rad(ref.latitude),lon0=rad(ref.longitude);
+   return {
+     ...p,
+     latitude:ref.latitude+(near.point.y/R)*180/Math.PI,
+     longitude:ref.longitude+(near.point.x/(R*Math.cos(lat0)))*180/Math.PI,
+     _displayCorrected:true
+   };
+ });
+}
 function fieldInsideField(outer,inner,project){
  const op=savedOutlinePoints(outer),ip=savedOutlinePoints(inner);
  if(op.length<3||ip.length<3)return false;
@@ -662,13 +708,16 @@ function classifyFieldRelation(fields){
    tolerance:Math.max(...fields.map(relationTolerance))
  };
 }
-function svgForFields(fields,mode="both",singleScale=false){
+function svgForFields(fields,mode="both",singleScale=false,outerField=null){
  if(!fields.length)return "";
 
+ const relationProject=commonMetricProjector(fields);
  const packs=fields.map(f=>({
    field:f,
    gps:f.points||[],
-   straight:savedOutlinePoints(f)
+   straight:(outerField && Number(f.id)!==Number(outerField.id) && relationProject)
+     ? correctedInnerStraight(outerField,f,relationProject)
+     : savedOutlinePoints(f)
  }));
  const all=[];
  packs.forEach(x=>{
@@ -741,7 +790,7 @@ function renderSavedComparison(){
    $("relationHelp").textContent="Select another saved field to determine Inner / Outer or Side by Side.";
  }else if(relation.layout==="overlay"){
    $("autoRelation").textContent="Auto: Inner / Outer";
-   $("relationHelp").textContent=`Coordinates show ${escapeHtml(relation.outer.name)} as the outer field. GPS tolerance up to ±${relation.tolerance.toFixed(1)} m is allowed when a point is just outside the boundary.`;
+   $("relationHelp").textContent=`Coordinates show ${escapeHtml(relation.outer.name)} as the outer field. Straight-view inner corners that drift just outside are aligned back to the outer edge within the ±${relation.tolerance.toFixed(1)} m GPS tolerance.`;
  }else{
    $("autoRelation").textContent="Auto: Side by Side";
    $("relationHelp").textContent="The selected coordinates do not show one field inside all the others, so they are displayed separately.";
@@ -753,7 +802,7 @@ function renderSavedComparison(){
      const role=i===0?"Outer":"Inner "+i;
      return `<span><i class="legendDot" style="background:${fieldColor(i)}"></i><b>${escapeHtml(f.name)}</b> · ${role}</span>`;
    }).join("");
-   view.innerHTML=`<div class="compareWrap compareOverlay">${svgForFields(ranked,compareMode)}</div><div class="compareLegend">${legend}</div>`;
+   view.innerHTML=`<div class="compareWrap compareOverlay">${svgForFields(ranked,compareMode,false,relation.outer)}</div><div class="compareLegend">${legend}</div>`;
  }else{
    view.innerHTML=`<div class="compareGrid">${relation.ordered.map((f,i)=>{
      const st=savedOutlinePoints(f),gps=f.points||[];
