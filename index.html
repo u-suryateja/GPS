@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#176b3a">
+<title>Field Mapper</title>
+<style>
+:root{--green:#176b3a;--green2:#eaf6ee;--bg:#f4f7f4;--card:#fff;--text:#17221b;--muted:#66736a;--line:#dce5de;--danger:#b42318;--shadow:0 5px 18px #183d2520}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}
+button,input{font:inherit}.app{max-width:760px;margin:auto;padding:12px 12px 90px}.top{display:flex;align-items:center;justify-content:space-between;margin:4px 2px 12px}.top h1{font-size:22px;margin:0}.pill{font-size:12px;padding:6px 9px;border-radius:99px;background:#e8ece9;color:#536158}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px;padding:14px;margin:10px 0;box-shadow:var(--shadow)}
+.card h2{font-size:14px;margin:0 0 12px;color:#33463a;text-transform:uppercase;letter-spacing:.05em}
+.gpsgrid,.stats{display:grid;grid-template-columns:1fr 1fr;gap:9px}.metric{background:#f7faf8;border:1px solid #e5ece7;border-radius:12px;padding:10px}.metric small{display:block;color:var(--muted);font-size:11px}.metric b{display:block;margin-top:3px;font-size:16px;word-break:break-all}
+.status{margin-top:10px;display:flex;justify-content:space-between;gap:8px;align-items:center;font-size:13px}.dot{width:9px;height:9px;border-radius:50%;display:inline-block;background:#999;margin-right:6px}.good{background:#16803c}.fair{background:#d89500}.poor{background:#c62828}
+.previewWrap{height:330px;border-radius:14px;overflow:hidden;background:linear-gradient(#f7fbf8,#eef6f0);border:1px solid #dce9df;position:relative}
+svg{width:100%;height:100%;display:block;touch-action:manipulation}.empty{position:absolute;inset:0;display:grid;place-items:center;text-align:center;color:#7a887e;padding:30px;pointer-events:none}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:9px}.btn{border:0;border-radius:13px;min-height:48px;padding:10px 12px;font-weight:700;background:#e9eeeb;color:#223028}.btn.primary{background:var(--green);color:#fff}.btn.point{grid-column:1/-1;min-height:58px;font-size:17px;background:#1b7b43;color:#fff}.btn.finish{grid-column:1/-1;background:#26372d;color:#fff}.btn.danger{color:#fff;background:var(--danger)}.btn:disabled{opacity:.4}
+.row{display:flex;gap:8px;align-items:center;justify-content:space-between}.boundary,.savedPoint,.savedField{padding:10px 0;border-top:1px solid #edf1ee}.boundary:first-child,.savedPoint:first-child,.savedField:first-child{border-top:0}
+.muted{color:var(--muted);font-size:12px}.tinybtn{border:1px solid #d8e0da;background:#fff;border-radius:9px;padding:7px 9px;font-weight:650}.tinybtn.dangerText{color:var(--danger)}
+input{width:100%;border:1px solid #ccd8cf;border-radius:11px;padding:11px;background:#fff}
+dialog{width:min(92vw,460px);border:0;border-radius:18px;padding:0;box-shadow:0 20px 60px #0005}dialog::backdrop{background:#0007}.modal{padding:18px}.modal h3{margin:0 0 12px}.modal .buttons{display:flex;gap:8px;justify-content:flex-end;margin-top:16px}
+.notice{padding:10px;border-radius:11px;background:#fff5df;color:#725000;font-size:13px;margin-top:10px}
+.hidden{display:none!important}
+@media(min-width:650px){.app{padding-top:20px}.gpsgrid{grid-template-columns:repeat(4,1fr)}.stats{grid-template-columns:repeat(4,1fr)}.previewWrap{height:430px}}
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top"><h1>🌾 Field Mapper</h1><span class="pill" id="surveyState">Ready</span></header>
+
+  <section class="card">
+    <h2>GPS</h2>
+    <div class="gpsgrid">
+      <div class="metric"><small>Latitude</small><b id="lat">—</b></div>
+      <div class="metric"><small>Longitude</small><b id="lon">—</b></div>
+      <div class="metric"><small>Accuracy</small><b id="accuracy">—</b></div>
+      <div class="metric"><small>Saved points</small><b id="pointCount">0</b></div>
+    </div>
+    <div class="status"><span><i class="dot" id="gpsDot"></i><span id="gpsStatus">GPS not started</span></span><span id="gpsTime" class="muted"></span></div>
+  </section>
+
+  <section class="card">
+    <div class="row"><h2>Field Preview</h2><span class="muted" id="boundaryNow">Boundary 1</span></div>
+    <div class="previewWrap">
+      <svg id="fieldSvg" viewBox="0 0 600 400" aria-label="Field preview"></svg>
+      <div class="empty" id="emptyPreview">Press START, then ADD POINT at field boundary points.</div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>Measurements</h2>
+    <div class="stats">
+      <div class="metric"><small>Current boundary</small><b id="currentLength">0.00 m</b></div>
+      <div class="metric"><small>Perimeter</small><b id="perimeter">0.00 m</b></div>
+      <div class="metric"><small>Area</small><b id="areaM2">0.00 m²</b></div>
+      <div class="metric"><small>Area</small><b id="areaAcre">0.0000 acre</b></div>
+    </div>
+    <div class="muted" style="margin-top:8px" id="extraArea">0.00 cents · 0.0000 ha</div>
+  </section>
+
+  <section class="card">
+    <h2>Controls</h2>
+    <div class="actions">
+      <button class="btn primary" id="startBtn">▶ START</button>
+      <button class="btn" id="stopGpsBtn">■ STOP GPS</button>
+      <button class="btn point" id="addPointBtn" disabled>＋ ADD POINT</button>
+      <button class="btn" id="undoBtn" disabled>↶ UNDO</button>
+      <button class="btn" id="redoBtn" disabled>↷ REDO</button>
+      <button class="btn" id="addBoundaryBtn" disabled>＋ ADD BOUNDARY</button>
+      <button class="btn" id="endBoundaryBtn" disabled>✓ BOUNDARY ENDED</button>
+      <button class="btn finish" id="finishBtn" disabled>✓ FINISH FIELD</button>
+    </div>
+    <div id="message" class="notice hidden"></div>
+  </section>
+
+  <section class="card">
+    <h2>Boundaries</h2>
+    <div id="boundaryList" class="muted">No boundaries recorded.</div>
+  </section>
+
+  <section class="card">
+    <h2>Saved Points</h2>
+    <div id="pointList" class="muted">No points saved.</div>
+  </section>
+
+  <section class="card">
+    <h2>Saved Fields</h2>
+    <div id="savedFields" class="muted">No saved fields.</div>
+  </section>
+</div>
+
+<dialog id="pointDialog"><div class="modal">
+  <h3 id="pdTitle">Point</h3>
+  <div id="pdInfo"></div>
+  <div class="buttons">
+    <button class="tinybtn" id="replacePointBtn">Replace with current GPS</button>
+    <button class="tinybtn dangerText" id="deletePointBtn">Delete</button>
+    <button class="tinybtn" onclick="pointDialog.close()">Close</button>
+  </div>
+</div></dialog>
+
+<dialog id="saveDialog"><div class="modal">
+  <h3>Save Field</h3>
+  <input id="fieldName" placeholder="Field name">
+  <div class="buttons">
+    <button class="tinybtn" onclick="saveDialog.close()">Cancel</button>
+    <button class="btn primary" id="saveFieldBtn">Save</button>
+  </div>
+</div></dialog>
+
+<script>
+const $=id=>document.getElementById(id);
+const R=6371008.8, ACRE=4046.8564224, CENT=40.468564224;
+let watchId=null,current=null,points=[],boundaries=[{id:1,ended:false}],activeBoundary=1,finished=false;
+let undoStack=[],redoStack=[],selectedPointId=null;
+
+function snapshot(){return JSON.stringify({points,boundaries,activeBoundary,finished})}
+function restore(s){const x=JSON.parse(s);points=x.points;boundaries=x.boundaries;activeBoundary=x.activeBoundary;finished=x.finished;render()}
+function commit(){undoStack.push(snapshot());if(undoStack.length>100)undoStack.shift();redoStack=[]}
+function undo(){if(!undoStack.length)return;redoStack.push(snapshot());restore(undoStack.pop())}
+function redo(){if(!redoStack.length)return;undoStack.push(snapshot());restore(redoStack.pop())}
+
+function rad(x){return x*Math.PI/180}
+function hav(a,b){const dLat=rad(b.latitude-a.latitude),dLon=rad(b.longitude-a.longitude),la1=rad(a.latitude),la2=rad(b.latitude);const h=Math.sin(dLat/2)**2+Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)**2;return 2*R*Math.asin(Math.sqrt(h))}
+function localXY(ps){
+ if(!ps.length)return[];
+ const lat0=rad(ps.reduce((s,p)=>s+p.latitude,0)/ps.length), lon0=rad(ps.reduce((s,p)=>s+p.longitude,0)/ps.length);
+ return ps.map(p=>({x:R*(rad(p.longitude)-lon0)*Math.cos(lat0),y:R*(rad(p.latitude)-lat0)}));
+}
+function polygonArea(ps){if(ps.length<3)return 0;const xy=localXY(ps);let s=0;for(let i=0;i<xy.length;i++){let j=(i+1)%xy.length;s+=xy[i].x*xy[j].y-xy[j].x*xy[i].y}return Math.abs(s)/2}
+function perimeterValue(ps,close=finished){if(ps.length<2)return 0;let s=0;for(let i=1;i<ps.length;i++)s+=hav(ps[i-1],ps[i]);if(close&&ps.length>2)s+=hav(ps.at(-1),ps[0]);return s}
+function boundaryLength(id){const idx=points.filter(p=>p.boundaryId===id).map(p=>points.indexOf(p));if(!idx.length)return 0;let s=0;const first=idx[0];if(first>0)s+=hav(points[first-1],points[first]);for(let k=1;k<idx.length;k++)s+=hav(points[idx[k-1]],points[idx[k]]);return s}
+
+function startGPS(){
+ if(!navigator.geolocation){msg("Geolocation is not supported by this browser.");return}
+ if(watchId!==null)return;
+ $("gpsStatus").textContent="Finding GPS…";$("surveyState").textContent="Surveying";
+ watchId=navigator.geolocation.watchPosition(pos=>{
+   current={latitude:pos.coords.latitude,longitude:pos.coords.longitude,accuracy:pos.coords.accuracy,timestamp:pos.timestamp};
+   $("lat").textContent=current.latitude.toFixed(7);$("lon").textContent=current.longitude.toFixed(7);$("accuracy").textContent="±"+current.accuracy.toFixed(1)+" m";
+   $("gpsTime").textContent=new Date(current.timestamp).toLocaleTimeString();
+   let status=current.accuracy<=5?"Good":current.accuracy<=10?"Fair":"Poor";
+   $("gpsStatus").textContent=status+" GPS";$("gpsDot").className="dot "+status.toLowerCase();$("addPointBtn").disabled=finished;
+ },err=>msg("GPS error: "+err.message),{enableHighAccuracy:true,maximumAge:0,timeout:15000});
+ render();
+}
+function stopGPS(){if(watchId!==null){navigator.geolocation.clearWatch(watchId);watchId=null}$("surveyState").textContent=finished?"Finished":"GPS stopped";$("gpsStatus").textContent="GPS stopped";$("gpsDot").className="dot";render()}
+function addPoint(){
+ if(!current||finished)return msg("Wait for a valid GPS position.");
+ const save=()=>{commit();points.push({id:crypto.randomUUID?crypto.randomUUID():Date.now()+"-"+Math.random(),latitude:current.latitude,longitude:current.longitude,accuracy:current.accuracy,timestamp:current.timestamp,boundaryId:activeBoundary,sequenceNumber:points.length+1});render()};
+ if(current.accuracy>10&&!confirm(`Current GPS accuracy is ±${current.accuracy.toFixed(1)} m. Save anyway?`))return;save();
+}
+function endBoundary(){
+ const bp=points.filter(p=>p.boundaryId===activeBoundary);if(!bp.length)return msg("Add at least one point to this boundary.");
+ commit();boundaries.find(b=>b.id===activeBoundary).ended=true;render();
+}
+function addBoundary(){
+ const cur=boundaries.find(b=>b.id===activeBoundary);if(!cur?.ended)return msg("End the current boundary first.");
+ commit();activeBoundary=Math.max(...boundaries.map(b=>b.id))+1;boundaries.push({id:activeBoundary,ended:false});render();
+}
+function finish(){
+ if(points.length<3)return msg("At least 3 points are required.");
+ if(polygonArea(points)<0.01)return msg("The saved points do not form a valid field area.");
+ if(!confirm("Finish and close this field boundary?"))return;
+ commit();finished=true;stopGPS();render();$("fieldName").value="Field "+new Date().toLocaleDateString();$("saveDialog").showModal();
+}
+function saveField(){
+ const name=$("fieldName").value.trim()||"Field "+new Date().toLocaleString();
+ const data={id:Date.now(),name,date:new Date().toISOString(),points:JSON.parse(JSON.stringify(points)),boundaries:JSON.parse(JSON.stringify(boundaries)),area:polygonArea(points),perimeter:perimeterValue(points,true)};
+ const arr=getSaved();arr.unshift(data);localStorage.setItem("fieldMapperSurveys",JSON.stringify(arr));$("saveDialog").close();renderSaved();msg("Field saved.");
+}
+function getSaved(){try{return JSON.parse(localStorage.getItem("fieldMapperSurveys")||"[]")}catch{return[]}}
+function openSaved(id){const f=getSaved().find(x=>x.id===id);if(!f)return;commit();points=f.points;boundaries=f.boundaries?.length?f.boundaries:[{id:1,ended:true}];activeBoundary=boundaries.at(-1).id;finished=true;stopGPS();render();window.scrollTo({top:0,behavior:"smooth"})}
+function deleteSaved(id){if(!confirm("Delete this saved field?"))return;localStorage.setItem("fieldMapperSurveys",JSON.stringify(getSaved().filter(x=>x.id!==id)));renderSaved()}
+
+function openPoint(id){
+ const p=points.find(x=>x.id===id);if(!p)return;selectedPointId=id;
+ $("pdTitle").textContent="P"+(points.indexOf(p)+1);
+ $("pdInfo").innerHTML=`<div class="metric"><small>Latitude</small><b>${p.latitude.toFixed(7)}</b></div><br><div class="metric"><small>Longitude</small><b>${p.longitude.toFixed(7)}</b></div><p>Accuracy: ±${p.accuracy.toFixed(1)} m<br>Boundary: ${p.boundaryId}<br>Time: ${new Date(p.timestamp).toLocaleString()}</p>`;
+ $("pointDialog").showModal();
+}
+function deletePoint(){
+ const i=points.findIndex(p=>p.id===selectedPointId);if(i<0||!confirm("Delete this point?"))return;commit();points.splice(i,1);points.forEach((p,j)=>p.sequenceNumber=j+1);$("pointDialog").close();render();
+}
+function replacePoint(){
+ if(!current)return msg("No current GPS position.");
+ const i=points.findIndex(p=>p.id===selectedPointId);if(i<0)return;commit();points[i]={...points[i],latitude:current.latitude,longitude:current.longitude,accuracy:current.accuracy,timestamp:current.timestamp};$("pointDialog").close();render();
+}
+function draw(){
+ const svg=$("fieldSvg");svg.innerHTML="";$("emptyPreview").classList.toggle("hidden",points.length>0);if(!points.length)return;
+ const xy=localXY(points),xs=xy.map(p=>p.x),ys=xy.map(p=>p.y),minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
+ const pad=55,w=600,h=400,dx=Math.max(maxX-minX,1),dy=Math.max(maxY-minY,1),scale=Math.min((w-2*pad)/dx,(h-2*pad)/dy);
+ const q=xy.map(p=>({x:(p.x-(minX+maxX)/2)*scale+w/2,y:h/2-(p.y-(minY+maxY)/2)*scale}));
+ const ns="http://www.w3.org/2000/svg";
+ if(q.length>1){const pl=document.createElementNS(ns,finished?"polygon":"polyline");pl.setAttribute("points",q.map(p=>`${p.x},${p.y}`).join(" "));pl.setAttribute("fill",finished?"rgba(23,107,58,.13)":"none");pl.setAttribute("stroke","#176b3a");pl.setAttribute("stroke-width","4");pl.setAttribute("stroke-linejoin","round");svg.appendChild(pl)}
+ q.forEach((v,i)=>{const g=document.createElementNS(ns,"g");g.style.cursor="pointer";g.onclick=()=>openPoint(points[i].id);const c=document.createElementNS(ns,"circle");c.setAttribute("cx",v.x);c.setAttribute("cy",v.y);c.setAttribute("r","8");c.setAttribute("fill","#176b3a");c.setAttribute("stroke","white");c.setAttribute("stroke-width","3");const t=document.createElementNS(ns,"text");t.setAttribute("x",v.x+11);t.setAttribute("y",v.y-11);t.setAttribute("font-size","16");t.setAttribute("font-weight","700");t.textContent="P"+(i+1);g.append(c,t);svg.appendChild(g)});
+}
+function render(){
+ $("pointCount").textContent=points.length;$("boundaryNow").textContent="Boundary "+activeBoundary;
+ const a=polygonArea(points),per=perimeterValue(points,finished);$("currentLength").textContent=boundaryLength(activeBoundary).toFixed(2)+" m";$("perimeter").textContent=per.toFixed(2)+" m";$("areaM2").textContent=a.toFixed(2)+" m²";$("areaAcre").textContent=(a/ACRE).toFixed(4)+" acre";$("extraArea").textContent=(a/CENT).toFixed(2)+" cents · "+(a/10000).toFixed(4)+" ha";
+ $("undoBtn").disabled=!undoStack.length;$("redoBtn").disabled=!redoStack.length;$("finishBtn").disabled=points.length<3||finished;$("endBoundaryBtn").disabled=finished||!points.some(p=>p.boundaryId===activeBoundary);$("addBoundaryBtn").disabled=finished||!boundaries.find(b=>b.id===activeBoundary)?.ended;
+ if(current)$("addPointBtn").disabled=finished;
+ $("boundaryList").innerHTML=boundaries.map(b=>`<div class="boundary row"><span><b>Boundary ${b.id}</b><br><span class="muted">${b.ended?"Ended":"Active"}</span></span><b>${boundaryLength(b.id).toFixed(2)} m</b></div>`).join("")||"No boundaries recorded.";
+ $("pointList").innerHTML=points.length?points.map((p,i)=>`<div class="savedPoint row"><span><b>P${i+1}</b> · Boundary ${p.boundaryId}<br><span class="muted">${p.latitude.toFixed(6)}, ${p.longitude.toFixed(6)} · ±${p.accuracy.toFixed(1)} m</span></span><button class="tinybtn" onclick="openPoint('${p.id}')">View</button></div>`).join(""):"No points saved.";
+ draw();renderSaved();
+}
+function renderSaved(){
+ const arr=getSaved();$("savedFields").innerHTML=arr.length?arr.map(f=>`<div class="savedField"><div class="row"><span><b>${escapeHtml(f.name)}</b><br><span class="muted">${new Date(f.date).toLocaleString()} · ${f.points.length} points</span></span><b>${(f.area/ACRE).toFixed(4)} ac</b></div><div class="row" style="margin-top:8px"><span class="muted">${f.perimeter.toFixed(2)} m perimeter</span><span><button class="tinybtn" onclick="openSaved(${f.id})">Open</button> <button class="tinybtn dangerText" onclick="deleteSaved(${f.id})">Delete</button></span></div></div>`).join(""):"No saved fields.";
+}
+function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]))}
+function msg(s){const e=$("message");e.textContent=s;e.classList.remove("hidden");clearTimeout(msg.t);msg.t=setTimeout(()=>e.classList.add("hidden"),4500)}
+
+$("startBtn").onclick=startGPS;$("stopGpsBtn").onclick=stopGPS;$("addPointBtn").onclick=addPoint;$("undoBtn").onclick=undo;$("redoBtn").onclick=redo;$("endBoundaryBtn").onclick=endBoundary;$("addBoundaryBtn").onclick=addBoundary;$("finishBtn").onclick=finish;$("saveFieldBtn").onclick=saveField;$("deletePointBtn").onclick=deletePoint;$("replacePointBtn").onclick=replacePoint;
+render();
+</script>
+</body>
+</html>
