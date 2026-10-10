@@ -53,7 +53,7 @@ dialog{width:min(92vw,460px);border:0;border-radius:18px;padding:0;box-shadow:0 
 </head>
 <body>
 <div class="app">
-  <header class="top"><h1>🌾 Field Mapper v7</h1><div style="display:flex;gap:7px;align-items:center"><button class="tinybtn hidden" id="closeSavedViewBtn">✕ Close View</button><span class="pill" id="surveyState">Ready</span></div></header>
+  <header class="top"><h1>🌾 Field Mapper v9</h1><div style="display:flex;gap:7px;align-items:center"><button class="tinybtn hidden" id="closeSavedViewBtn">✕ Close View</button><span class="pill" id="surveyState">Ready</span></div></header>
 
   <section class="card">
     <h2>GPS</h2>
@@ -164,16 +164,31 @@ function closeThreshold(){
  const lastAcc=Number(points.at(-1)?.accuracy)||0;
  return Math.max(AUTO_CLOSE_MIN_METERS,firstAcc+lastAcc);
 }
-let watchId=null,current=null,points=[],boundaries=[{id:1,ended:false}],activeBoundary=1,finished=false;
-let undoStack=[],redoStack=[],selectedPointId=null,viewingSaved=false,preSavedView=null,previewMode="both";
+let watchId=null,current=null,points=[],boundaries=[{id:1,name:"Boundary 1",ended:false}],activeBoundary=1,finished=false;
+let undoStack=[],redoStack=[],selectedPointId=null,viewingSaved=false,preSavedView=null,previewMode="both",surveyDirty=false;
 const selectedSavedFields=new Set();
 let compareMode="both";
 
+function boundaryName(b){return (b?.name||"").trim()||("Boundary "+b.id)}
 function snapshot(){return JSON.stringify({points,boundaries,activeBoundary,finished})}
 function restore(s){const x=JSON.parse(s);points=x.points;boundaries=x.boundaries;activeBoundary=x.activeBoundary;finished=x.finished;render()}
-function commit(){undoStack.push(snapshot());if(undoStack.length>100)undoStack.shift();redoStack=[]}
-function undo(){if(!undoStack.length)return;redoStack.push(snapshot());restore(undoStack.pop());toast("Undo successful","info")}
-function redo(){if(!redoStack.length)return;undoStack.push(snapshot());restore(redoStack.pop());toast("Redo successful","info")}
+function commit(){undoStack.push(snapshot());if(undoStack.length>100)undoStack.shift();redoStack=[];surveyDirty=true}
+function undo(){if(!undoStack.length)return;redoStack.push(snapshot());restore(undoStack.pop());surveyDirty=true;toast("Undo successful","info")}
+function redo(){if(!redoStack.length)return;undoStack.push(snapshot());restore(redoStack.pop());surveyDirty=true;toast("Redo successful","info")}
+function renameBoundary(id){
+ if(viewingSaved)return;
+ const b=boundaries.find(x=>x.id===id);if(!b)return;
+ const current=boundaryName(b);
+ const next=prompt("Rename boundary:",current);
+ if(next===null)return;
+ const name=next.trim();
+ if(!name)return msg("Boundary name cannot be empty.");
+ if(name===current)return;
+ commit();
+ b.name=name;
+ render();
+ toast("Boundary renamed to "+name,"info");
+}
 
 function rad(x){return x*Math.PI/180}
 function hav(a,b){const dLat=rad(b.latitude-a.latitude),dLon=rad(b.longitude-a.longitude),la1=rad(a.latitude),la2=rad(b.latitude);const h=Math.sin(dLat/2)**2+Math.cos(la1)*Math.cos(la2)*Math.sin(dLon/2)**2;return 2*R*Math.asin(Math.sqrt(h))}
@@ -270,19 +285,19 @@ function addBoundary(){
  const last=points.at(-1);if(!last)return msg("Add a point before starting the next boundary.");
  const next=Math.max(...boundaries.map(b=>b.id))+1;
  if(!confirm(`Start Boundary ${next}?\n\nP${points.length}, the last point of Boundary ${activeBoundary}, will automatically become the starting point of Boundary ${next}.`))return;
- commit();activeBoundary=next;boundaries.push({id:activeBoundary,ended:false});openBoundaries.add(activeBoundary);render();toast("Boundary "+activeBoundary+" started from P"+points.length);
+ commit();activeBoundary=next;boundaries.push({id:activeBoundary,name:"Boundary "+activeBoundary,ended:false});openBoundaries.add(activeBoundary);render();toast("Boundary "+activeBoundary+" started from P"+points.length);
 }
 function deleteBoundary(id){
  if(viewingSaved)return;
  const b=boundaries.find(x=>x.id===id);if(!b)return;
  const bp=points.filter(p=>p.boundaryId===id);
- if(!confirm(`Delete Boundary ${id}?\n\nThis will also delete ${bp.length} saved point${bp.length===1?"":"s"} from this boundary.`))return;
+ if(!confirm(`Delete ${boundaryName(b)}?\n\nThis will also delete ${bp.length} saved point${bp.length===1?"":"s"} from this boundary.`))return;
  commit();
  points=points.filter(p=>p.boundaryId!==id);
  boundaries=boundaries.filter(x=>x.id!==id);
  openBoundaries.delete(id);
  if(!boundaries.length){
-   boundaries=[{id:1,ended:false}];activeBoundary=1;openBoundaries.add(1);
+   boundaries=[{id:1,name:"Boundary 1",ended:false}];activeBoundary=1;openBoundaries.add(1);
  }else{
    activeBoundary=boundaries.at(-1).id;
    const active=boundaries.find(x=>x.id===activeBoundary);
@@ -322,7 +337,7 @@ function saveField(){
    gpsArea:polygonArea(points),
    gpsPerimeter:perimeterValue(points,true)
  };
- const arr=getSaved();arr.unshift(data);localStorage.setItem("fieldMapperSurveys",JSON.stringify(arr));$("saveDialog").close();renderSaved();toast("Field saved successfully");
+ const arr=getSaved();arr.unshift(data);localStorage.setItem("fieldMapperSurveys",JSON.stringify(arr));$("saveDialog").close();surveyDirty=false;renderSaved();toast("Field saved successfully");
 }
 function getSaved(){try{return JSON.parse(localStorage.getItem("fieldMapperSurveys")||"[]")}catch{return[]}}
 function openSaved(id){
@@ -330,7 +345,7 @@ function openSaved(id){
  if(!viewingSaved)preSavedView=snapshot();
  stopGPS();
  points=JSON.parse(JSON.stringify(f.points));
- boundaries=JSON.parse(JSON.stringify(f.boundaries?.length?f.boundaries:[{id:1,ended:true}]));
+ boundaries=JSON.parse(JSON.stringify(f.boundaries?.length?f.boundaries:[{id:1,name:"Boundary 1",ended:true}]));
  activeBoundary=boundaries.at(-1).id;finished=true;viewingSaved=true;
  $("closeSavedViewBtn").classList.remove("hidden");$("surveyState").textContent="Viewing saved field";
  render();toast("Saved field opened","info");window.scrollTo({top:0,behavior:"smooth"});
@@ -338,7 +353,7 @@ function openSaved(id){
 function closeSavedView(){
  if(!viewingSaved)return;
  if(preSavedView)restore(preSavedView);
- else{points=[];boundaries=[{id:1,ended:false}];activeBoundary=1;finished=false;render()}
+ else{points=[];boundaries=[{id:1,name:"Boundary 1",ended:false}];activeBoundary=1;finished=false;render()}
  viewingSaved=false;preSavedView=null;
  $("closeSavedViewBtn").classList.add("hidden");$("surveyState").textContent="Ready";
  toast("Saved field view closed","info");
@@ -462,7 +477,7 @@ function draw(){
  }
 }
 function render(){
- $("pointCount").textContent=points.length;$("boundaryNow").textContent="Boundary "+activeBoundary;
+ $("pointCount").textContent=points.length;const activeB=boundaries.find(b=>b.id===activeBoundary);$("boundaryNow").textContent=boundaryName(activeB);
  const shape=outlinePoints();
  const straightArea=polygonArea(shape),gpsArea=polygonArea(points);
  const straightPer=perimeterValue(shape,shape.length>=3),gpsPer=perimeterValue(points,points.length>=3);
@@ -509,13 +524,16 @@ function render(){
  }).join(""):`<div class="muted">No points saved in this boundary.</div>`;
  return `<div class="boundaryBox ${openBoundaries.has(b.id)?"open":""}">
    <button class="boundaryHead" onclick="toggleBoundary(${b.id})">
-     <span><span class="boundaryArrow">▶</span>Boundary ${b.id} <span class="muted">· ${b.ended?"Ended":"Active"}</span></span>
+     <span><span class="boundaryArrow">▶</span>${escapeHtml(boundaryName(b))} <span class="muted">· ${b.ended?"Ended":"Active"}</span></span>
      <span>${boundaryLength(b.id).toFixed(2)} m</span>
    </button>
    <div class="boundaryBody">
      <div class="row"><b>${bp.length} GPS reading${bp.length===1?"":"s"}</b><span class="muted">${b.ended?"Completed":"Recording"}</span></div>
      ${pointRows}
-     ${viewingSaved?"":`<div style="margin-top:10px"><button class="tinybtn dangerText" onclick="event.stopPropagation();deleteBoundary(${b.id})">🗑 Delete Boundary</button></div>`}
+     ${viewingSaved?"":`<div style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap">
+       <button class="tinybtn" onclick="event.stopPropagation();renameBoundary(${b.id})">✎ Rename</button>
+       <button class="tinybtn dangerText" onclick="event.stopPropagation();deleteBoundary(${b.id})">🗑 Delete Boundary</button>
+     </div>`}
    </div>
  </div>`;
 }).join("")||"No boundaries recorded.";
@@ -911,6 +929,12 @@ function msg(s){const e=$("message");e.textContent=s;e.classList.remove("hidden"
 const openBoundaries=new Set([1]);
 function toggleBoundary(id){openBoundaries.has(id)?openBoundaries.delete(id):openBoundaries.add(id);render()}
 
+
+window.addEventListener("beforeunload",e=>{
+ if(viewingSaved || !surveyDirty || !points.length)return;
+ e.preventDefault();
+ e.returnValue="";
+});
 $("compareStraightBtn").onclick=()=>{compareMode="outline";renderSavedComparison()};
 $("compareGpsBtn").onclick=()=>{compareMode="raw";renderSavedComparison()};
 $("compareBothBtn").onclick=()=>{compareMode="both";renderSavedComparison()};
