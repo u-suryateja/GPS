@@ -54,11 +54,6 @@ dialog{width:min(92vw,460px);border:0;border-radius:18px;padding:0;box-shadow:0 
 
   <section class="card">
     <div class="row"><h2>Field Preview</h2><span class="muted" id="boundaryNow">Boundary 1</span></div>
-    <div class="row" style="gap:8px;margin:8px 0 12px">
-      <button class="tinybtn" id="outlineViewBtn">Boundary View</button>
-      <button class="tinybtn" id="rawViewBtn">GPS View</button>
-      <button class="tinybtn" id="bothViewBtn">Both</button>
-    </div>
     <div class="previewWrap">
       <svg id="fieldSvg" viewBox="0 0 600 400" aria-label="Field preview"></svg>
       <div class="empty" id="emptyPreview">Press START, then ADD POINT at field boundary points.</div>
@@ -299,66 +294,48 @@ function replacePoint(){
 }
 function draw(){
  const svg=$("fieldSvg");svg.innerHTML="";
- const shape=outlinePoints(),raw=points;
- const source=previewMode==="raw"?raw:(previewMode==="outline"?shape:[...raw,...shape]);
- $("emptyPreview").classList.toggle("hidden",source.length>0);
- if(!source.length)return;
+ const shape=outlinePoints();
+ $("emptyPreview").classList.toggle("hidden",shape.length>0);
+ if(!shape.length)return;
 
- const allXY=localXY(source),xs=allXY.map(p=>p.x),ys=allXY.map(p=>p.y);
+ const xy=localXY(shape),xs=xy.map(p=>p.x),ys=xy.map(p=>p.y);
  const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
  const pad=55,w=600,h=400,dx=Math.max(maxX-minX,1),dy=Math.max(maxY-minY,1);
  const scale=Math.min((w-2*pad)/dx,(h-2*pad)/dy);
- const lat0=rad(source[0].latitude),lon0=rad(source[0].longitude);
- const project=p=>{
-   const x=R*(rad(p.longitude)-lon0)*Math.cos(lat0),y=R*(rad(p.latitude)-rad(source[0].latitude));
-   return {x:(x-(minX+maxX)/2)*scale+w/2,y:h/2-(y-(minY+maxY)/2)*scale};
- };
+ const q=xy.map(p=>({x:(p.x-(minX+maxX)/2)*scale+w/2,y:h/2-(p.y-(minY+maxY)/2)*scale}));
  const ns="http://www.w3.org/2000/svg";
 
- function pathFor(ps,stroke,width,dash="",fill="none"){
-   if(ps.length<2)return;
-   const q=ps.map(project),el=document.createElementNS(ns,finished&&ps===shape?"polygon":"polyline");
+ if(q.length>1){
+   const el=document.createElementNS(ns,finished?"polygon":"polyline");
    el.setAttribute("points",q.map(v=>`${v.x},${v.y}`).join(" "));
-   el.setAttribute("fill",fill);el.setAttribute("stroke",stroke);el.setAttribute("stroke-width",width);
-   el.setAttribute("stroke-linejoin","round");el.setAttribute("stroke-linecap","round");
-   if(dash)el.setAttribute("stroke-dasharray",dash);svg.appendChild(el);
+   el.setAttribute("fill",finished?"rgba(23,107,58,.13)":"none");
+   el.setAttribute("stroke","#176b3a");el.setAttribute("stroke-width","5");
+   el.setAttribute("stroke-linejoin","miter");el.setAttribute("stroke-linecap","butt");
+   svg.appendChild(el);
  }
 
- // Raw GPS track: thin dashed line + small GPS dots.
- if(previewMode==="raw"||previewMode==="both"){
-   pathFor(raw,"#7b8780","2","6 6");
-   raw.forEach((p,i)=>{
-     const v=project(p),g=document.createElementNS(ns,"g");g.style.cursor="pointer";g.onclick=()=>openPoint(p.id);
-     const c=document.createElementNS(ns,"circle");c.setAttribute("cx",v.x);c.setAttribute("cy",v.y);c.setAttribute("r","5");c.setAttribute("fill","#7b8780");c.setAttribute("stroke","white");c.setAttribute("stroke-width","2");
-     const t=document.createElementNS(ns,"text");t.setAttribute("x",v.x+8);t.setAttribute("y",v.y-8);t.setAttribute("font-size","12");t.textContent="P"+(i+1);
-     g.append(c,t);svg.appendChild(g);
-   });
+ // Always show the straight last-point → first-point closing side.
+ if(!finished&&q.length>=3){
+   const line=document.createElementNS(ns,"line");
+   line.setAttribute("x1",q.at(-1).x);line.setAttribute("y1",q.at(-1).y);
+   line.setAttribute("x2",q[0].x);line.setAttribute("y2",q[0].y);
+   line.setAttribute("stroke","#176b3a");line.setAttribute("stroke-width","3");
+   line.setAttribute("stroke-dasharray","8 7");svg.appendChild(line);
  }
 
- // Boundary endpoint outline: thick solid green line.
- if(previewMode==="outline"||previewMode==="both"){
-   pathFor(shape,"#176b3a","5","",finished?"rgba(23,107,58,.13)":"none");
-   if(!finished&&shape.length>=3){
-     const a=project(shape.at(-1)),b=project(shape[0]),d=hav(shape.at(-1),shape[0]),threshold=closeThreshold();
-     const line=document.createElementNS(ns,"line");
-     line.setAttribute("x1",a.x);line.setAttribute("y1",a.y);line.setAttribute("x2",b.x);line.setAttribute("y2",b.y);
-     line.setAttribute("stroke",d<=threshold?"#176b3a":"#8a978e");line.setAttribute("stroke-width","3");line.setAttribute("stroke-dasharray","8 7");svg.appendChild(line);
-   }
-   shape.forEach(p=>{
-     const v=project(p),n=points.indexOf(p)+1,g=document.createElementNS(ns,"g");g.style.cursor="pointer";g.onclick=()=>openPoint(p.id);
-     const c=document.createElementNS(ns,"circle");c.setAttribute("cx",v.x);c.setAttribute("cy",v.y);c.setAttribute("r","8");c.setAttribute("fill","#176b3a");c.setAttribute("stroke","white");c.setAttribute("stroke-width","3");
-     const t=document.createElementNS(ns,"text");t.setAttribute("x",v.x+11);t.setAttribute("y",v.y-11);t.setAttribute("font-size","16");t.setAttribute("font-weight","700");t.textContent="P"+n;
-     g.append(c,t);svg.appendChild(g);
-   });
- }
+ q.forEach((v,i)=>{
+   const p=shape[i],n=points.indexOf(p)+1,g=document.createElementNS(ns,"g");
+   g.style.cursor="pointer";g.onclick=()=>openPoint(p.id);
+   const c=document.createElementNS(ns,"circle");c.setAttribute("cx",v.x);c.setAttribute("cy",v.y);c.setAttribute("r","8");c.setAttribute("fill","#176b3a");c.setAttribute("stroke","white");c.setAttribute("stroke-width","3");
+   const t=document.createElementNS(ns,"text");t.setAttribute("x",v.x+11);t.setAttribute("y",v.y-11);t.setAttribute("font-size","16");t.setAttribute("font-weight","700");t.textContent="P"+n;
+   g.append(c,t);svg.appendChild(g);
+ });
 }
 function render(){
  $("pointCount").textContent=points.length;$("boundaryNow").textContent="Boundary "+activeBoundary;
  const shape=outlinePoints();
- const rawArea=polygonArea(points),outlineArea=polygonArea(shape);
- const rawPer=perimeterValue(points,finished),outlinePer=perimeterValue(shape,finished);
- const a=previewMode==="raw"?rawArea:outlineArea;
- const per=previewMode==="raw"?rawPer:outlinePer;
+ const a=polygonArea(shape);
+ const per=perimeterValue(shape,shape.length>=3);
  const hint=$("closeHint");
  if(!finished&&points.length>=3){
    const shapeNow=outlinePoints(),d=hav(shapeNow.at(-1),shapeNow[0]),t=closeThreshold();
@@ -368,19 +345,11 @@ function render(){
    hint.classList.remove("hidden");
  }else hint.classList.add("hidden");
  $("currentLength").textContent=boundaryLength(activeBoundary).toFixed(2)+" m";
- if(previewMode==="both"){
-   $("measurementMode").textContent="Both views";
-   $("perimeter").innerHTML=`Boundary ${outlinePer.toFixed(2)} m<br><span class="muted" style="font-size:13px">GPS ${rawPer.toFixed(2)} m</span>`;
-   $("areaM2").innerHTML=`Boundary ${outlineArea.toFixed(2)} m²<br><span class="muted" style="font-size:13px">GPS ${rawArea.toFixed(2)} m²</span>`;
-   $("areaAcre").innerHTML=`Boundary ${(outlineArea/ACRE).toFixed(4)} ac<br><span class="muted" style="font-size:13px">GPS ${(rawArea/ACRE).toFixed(4)} ac</span>`;
-   $("extraArea").textContent=`Boundary ${(outlineArea/CENT).toFixed(2)} cents · ${(outlineArea/10000).toFixed(4)} ha | GPS ${(rawArea/CENT).toFixed(2)} cents · ${(rawArea/10000).toFixed(4)} ha`;
- }else{
-   $("measurementMode").textContent=previewMode==="raw"?"GPS view":"Boundary view";
-   $("perimeter").textContent=per.toFixed(2)+" m";
-   $("areaM2").textContent=a.toFixed(2)+" m²";
-   $("areaAcre").textContent=(a/ACRE).toFixed(4)+" acre";
-   $("extraArea").textContent=(a/CENT).toFixed(2)+" cents · "+(a/10000).toFixed(4)+" ha";
- }
+ $("measurementMode").textContent="Straight boundary";
+ $("perimeter").textContent=per.toFixed(2)+" m";
+ $("areaM2").textContent=a.toFixed(2)+" m²";
+ $("areaAcre").textContent=(a/ACRE).toFixed(4)+" acre";
+ $("extraArea").textContent=(a/CENT).toFixed(2)+" cents · "+(a/10000).toFixed(4)+" ha";
  $("undoBtn").disabled=viewingSaved||!undoStack.length;$("redoBtn").disabled=viewingSaved||!redoStack.length;$("finishBtn").disabled=viewingSaved||points.length<3||finished;$("endBoundaryBtn").disabled=viewingSaved||finished||!points.some(p=>p.boundaryId===activeBoundary);$("addBoundaryBtn").disabled=viewingSaved||finished||!boundaries.find(b=>b.id===activeBoundary)?.ended;
  $("startBtn").disabled=viewingSaved;$("stopGpsBtn").disabled=viewingSaved;
  $("addPointBtn").disabled=viewingSaved||finished||!current;
@@ -426,20 +395,15 @@ function savedOutlinePoints(f){
 function renderSaved(){
  const arr=getSaved();
  $("savedFields").innerHTML=arr.length?arr.map(f=>{
-   const raw=f.points||[],outline=savedOutlinePoints(f);
-   const rawArea=polygonArea(raw),boundaryArea=polygonArea(outline);
-   const rawPer=perimeterValue(raw,true),boundaryPer=perimeterValue(outline,true);
+   const outline=savedOutlinePoints(f);
+   const area=polygonArea(outline),per=perimeterValue(outline,outline.length>=3);
+   const close=outline.length>=3?hav(outline.at(-1),outline[0]):0;
    return `<div class="savedField">
-     <div class="row"><span><b>${escapeHtml(f.name)}</b><br><span class="muted">${new Date(f.date).toLocaleString()} · ${raw.length} points</span></span></div>
+     <div class="row"><span><b>${escapeHtml(f.name)}</b><br><span class="muted">${new Date(f.date).toLocaleString()} · ${f.points?.length||0} GPS readings</span></span><b>${(area/ACRE).toFixed(4)} ac</b></div>
      <div style="margin-top:10px;padding-top:9px;border-top:1px solid #e6ebe7">
-       <div class="row"><b>Boundary View</b><b>${(boundaryArea/ACRE).toFixed(4)} ac</b></div>
-       <div class="muted">${boundaryArea.toFixed(2)} m² · ${(boundaryArea/CENT).toFixed(2)} cents · ${(boundaryArea/10000).toFixed(4)} ha</div>
-       <div class="muted">${boundaryPer.toFixed(2)} m perimeter</div>
-     </div>
-     <div style="margin-top:10px;padding-top:9px;border-top:1px solid #e6ebe7">
-       <div class="row"><b>GPS View</b><b>${(rawArea/ACRE).toFixed(4)} ac</b></div>
-       <div class="muted">${rawArea.toFixed(2)} m² · ${(rawArea/CENT).toFixed(2)} cents · ${(rawArea/10000).toFixed(4)} ha</div>
-       <div class="muted">${rawPer.toFixed(2)} m perimeter</div>
+       <b>Straight Boundary Calculation</b>
+       <div class="muted">${area.toFixed(2)} m² · ${(area/CENT).toFixed(2)} cents · ${(area/10000).toFixed(4)} ha</div>
+       <div class="muted">${per.toFixed(2)} m perimeter · Last → First: ${close.toFixed(2)} m</div>
      </div>
      <div style="text-align:right;margin-top:10px"><button class="tinybtn" onclick="openSaved(${f.id})">Open</button> <button class="tinybtn dangerText" onclick="deleteSaved(${f.id})">Delete</button></div>
    </div>`;
@@ -451,9 +415,6 @@ function msg(s){const e=$("message");e.textContent=s;e.classList.remove("hidden"
 const openBoundaries=new Set([1]);
 function toggleBoundary(id){openBoundaries.has(id)?openBoundaries.delete(id):openBoundaries.add(id);render()}
 
-$("outlineViewBtn").onclick=()=>{previewMode="outline";render();toast("Boundary view measurements","info")};
-$("rawViewBtn").onclick=()=>{previewMode="raw";render();toast("GPS view measurements","info")};
-$("bothViewBtn").onclick=()=>{previewMode="both";render();toast("Both measurements","info")};
 $("closeSavedViewBtn").onclick=closeSavedView;$("startBtn").onclick=startGPS;$("stopGpsBtn").onclick=stopGPS;$("addPointBtn").onclick=addPoint;$("undoBtn").onclick=undo;$("redoBtn").onclick=redo;$("endBoundaryBtn").onclick=endBoundary;$("addBoundaryBtn").onclick=addBoundary;$("finishBtn").onclick=finish;$("saveFieldBtn").onclick=saveField;$("deletePointBtn").onclick=deletePoint;$("replacePointBtn").onclick=replacePoint;
 render();
 </script>
