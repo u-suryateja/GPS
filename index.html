@@ -53,7 +53,7 @@ dialog{width:min(92vw,460px);border:0;border-radius:18px;padding:0;box-shadow:0 
 </head>
 <body>
 <div class="app">
-  <header class="top"><h1>🌾 Field Mapper v5</h1><div style="display:flex;gap:7px;align-items:center"><button class="tinybtn hidden" id="closeSavedViewBtn">✕ Close View</button><span class="pill" id="surveyState">Ready</span></div></header>
+  <header class="top"><h1>🌾 Field Mapper v6</h1><div style="display:flex;gap:7px;align-items:center"><button class="tinybtn hidden" id="closeSavedViewBtn">✕ Close View</button><span class="pill" id="surveyState">Ready</span></div></header>
 
   <section class="card">
     <h2>GPS</h2>
@@ -120,8 +120,7 @@ dialog{width:min(92vw,460px);border:0;border-radius:18px;padding:0;box-shadow:0 
     <div class="row"><h2>Selected Fields View</h2><span class="pill" id="selectedCount">0 selected</span></div>
 
     <div class="compareToolbar">
-      <button class="tinybtn active" id="overlayFieldsBtn">Inner / Outer</button>
-      <button class="tinybtn" id="sideFieldsBtn">Side by Side</button>
+      <span class="pill" id="autoRelation">Auto relation</span>
       <button class="tinybtn" id="compareStraightBtn">Straight</button>
       <button class="tinybtn" id="compareGpsBtn">GPS</button>
       <button class="tinybtn active" id="compareBothBtn">Both</button>
@@ -129,8 +128,8 @@ dialog{width:min(92vw,460px);border:0;border-radius:18px;padding:0;box-shadow:0 
     </div>
 
     <div id="compareFieldsView"></div>
-    <div class="muted" style="margin-top:8px">
-      Inner / Outer keeps the fields at their real GPS positions. If smaller fields are inside the outer field, they appear inside it.
+    <div class="muted" id="relationHelp" style="margin-top:8px">
+      Relation is decided automatically from the saved coordinates and GPS accuracy.
     </div>
   </section>
 </div>
@@ -168,7 +167,7 @@ function closeThreshold(){
 let watchId=null,current=null,points=[],boundaries=[{id:1,ended:false}],activeBoundary=1,finished=false;
 let undoStack=[],redoStack=[],selectedPointId=null,viewingSaved=false,preSavedView=null,previewMode="both";
 const selectedSavedFields=new Set();
-let compareLayout="overlay",compareMode="both";
+let compareMode="both";
 
 function snapshot(){return JSON.stringify({points,boundaries,activeBoundary,finished})}
 function restore(s){const x=JSON.parse(s);points=x.points;boundaries=x.boundaries;activeBoundary=x.activeBoundary;finished=x.finished;render()}
@@ -577,6 +576,92 @@ function fieldColor(i){
  return colors[i%colors.length];
 }
 function escapeAttr(v){return escapeHtml(v).replace(/"/g,"&quot;")}
+
+function relationTolerance(field){
+ const acc=(field.points||[])
+   .map(p=>Number(p.accuracy))
+   .filter(v=>Number.isFinite(v)&&v>0);
+ return acc.length?Math.max(...acc):3;
+}
+function commonMetricProjector(fields){
+ const all=fields.flatMap(f=>savedOutlinePoints(f));
+ if(!all.length)return null;
+ const ref=all[0],lat0=rad(ref.latitude),lon0=rad(ref.longitude);
+ return p=>({
+   x:R*(rad(p.longitude)-lon0)*Math.cos(lat0),
+   y:R*(rad(p.latitude)-lat0)
+ });
+}
+function pointInPolygonXY(p,poly){
+ let inside=false;
+ for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+   const a=poly[i],b=poly[j];
+   const hit=((a.y>p.y)!==(b.y>p.y)) &&
+     (p.x < (b.x-a.x)*(p.y-a.y)/((b.y-a.y)||1e-12)+a.x);
+   if(hit)inside=!inside;
+ }
+ return inside;
+}
+function distancePointToSegment(p,a,b){
+ const vx=b.x-a.x,vy=b.y-a.y,wx=p.x-a.x,wy=p.y-a.y;
+ const vv=vx*vx+vy*vy;
+ let t=vv?((wx*vx+wy*vy)/vv):0;
+ t=Math.max(0,Math.min(1,t));
+ const dx=p.x-(a.x+t*vx),dy=p.y-(a.y+t*vy);
+ return Math.hypot(dx,dy);
+}
+function distanceToPolygonEdge(p,poly){
+ let best=Infinity;
+ for(let i=0;i<poly.length;i++){
+   best=Math.min(best,distancePointToSegment(p,poly[i],poly[(i+1)%poly.length]));
+ }
+ return best;
+}
+function fieldInsideField(outer,inner,project){
+ const op=savedOutlinePoints(outer),ip=savedOutlinePoints(inner);
+ if(op.length<3||ip.length<3)return false;
+ if(polygonArea(op)<=polygonArea(ip))return false;
+
+ const outerXY=op.map(project),innerXY=ip.map(project);
+ const tolerance=Math.max(relationTolerance(outer),relationTolerance(inner));
+
+ // A point may fall just outside because phone GPS is ± a few metres.
+ // Treat it as inside when it is no farther from the outer edge than
+ // the recorded GPS accuracy.
+ return innerXY.every(p=>pointInPolygonXY(p,outerXY)||distanceToPolygonEdge(p,outerXY)<=tolerance);
+}
+function classifyFieldRelation(fields){
+ if(fields.length<2){
+   return {layout:"side",ordered:fields,outer:null,tolerance:fields[0]?relationTolerance(fields[0]):0};
+ }
+
+ const project=commonMetricProjector(fields);
+ const ranked=[...fields].sort((a,b)=>polygonArea(savedOutlinePoints(b))-polygonArea(savedOutlinePoints(a)));
+
+ // Do NOT call the largest field "Outer" just because it is larger.
+ // It is Outer only when its coordinates contain every other selected field
+ // (allowing the recorded GPS accuracy as tolerance).
+ for(const candidate of ranked){
+   const others=fields.filter(f=>Number(f.id)!==Number(candidate.id));
+   if(others.length && others.every(f=>fieldInsideField(candidate,f,project))){
+     const inners=[...others].sort((a,b)=>polygonArea(savedOutlinePoints(b))-polygonArea(savedOutlinePoints(a)));
+     return {
+       layout:"overlay",
+       ordered:[candidate,...inners],
+       outer:candidate,
+       tolerance:Math.max(...fields.map(relationTolerance))
+     };
+   }
+ }
+
+ // If no selected field contains all others, they are shown separately.
+ return {
+   layout:"side",
+   ordered:fields,
+   outer:null,
+   tolerance:Math.max(...fields.map(relationTolerance))
+ };
+}
 function svgForFields(fields,mode="both",singleScale=false){
  if(!fields.length)return "";
 
@@ -646,30 +731,41 @@ function renderSavedComparison(){
  card.classList.remove("hidden");
  $("selectedCount").textContent=fields.length+" selected";
 
- ["overlayFieldsBtn","sideFieldsBtn","compareStraightBtn","compareGpsBtn","compareBothBtn"].forEach(id=>$(id)?.classList.remove("active"));
- $(compareLayout==="overlay"?"overlayFieldsBtn":"sideFieldsBtn")?.classList.add("active");
+ ["compareStraightBtn","compareGpsBtn","compareBothBtn"].forEach(id=>$(id)?.classList.remove("active"));
  $({outline:"compareStraightBtn",raw:"compareGpsBtn",both:"compareBothBtn"}[compareMode])?.classList.add("active");
 
- if(compareLayout==="overlay"){
-   const ranked=[...fields].sort((a,b)=>polygonArea(savedOutlinePoints(b))-polygonArea(savedOutlinePoints(a)));
+ const relation=classifyFieldRelation(fields);
+
+ if(fields.length===1){
+   $("autoRelation").textContent="1 field";
+   $("relationHelp").textContent="Select another saved field to determine Inner / Outer or Side by Side.";
+ }else if(relation.layout==="overlay"){
+   $("autoRelation").textContent="Auto: Inner / Outer";
+   $("relationHelp").textContent=`Coordinates show ${escapeHtml(relation.outer.name)} as the outer field. GPS tolerance up to ±${relation.tolerance.toFixed(1)} m is allowed when a point is just outside the boundary.`;
+ }else{
+   $("autoRelation").textContent="Auto: Side by Side";
+   $("relationHelp").textContent="The selected coordinates do not show one field inside all the others, so they are displayed separately.";
+ }
+
+ if(relation.layout==="overlay"){
+   const ranked=relation.ordered;
    const legend=ranked.map((f,i)=>{
      const role=i===0?"Outer":"Inner "+i;
      return `<span><i class="legendDot" style="background:${fieldColor(i)}"></i><b>${escapeHtml(f.name)}</b> · ${role}</span>`;
    }).join("");
    view.innerHTML=`<div class="compareWrap compareOverlay">${svgForFields(ranked,compareMode)}</div><div class="compareLegend">${legend}</div>`;
  }else{
-   view.innerHTML=`<div class="compareGrid">${fields.map((f,i)=>{
+   view.innerHTML=`<div class="compareGrid">${relation.ordered.map((f,i)=>{
      const st=savedOutlinePoints(f),gps=f.points||[];
      const sa=polygonArea(st),ga=polygonArea(gps);
      return `<div class="compareMini">
-       <div class="row"><b>${escapeHtml(f.name)}</b><span class="muted">${compareMode==="outline"?"Straight":compareMode==="raw"?"GPS":"Both"}</span></div>
+       <div class="row"><b>${escapeHtml(f.name)}</b><span class="muted">Side by Side</span></div>
        ${svgForFields([f],compareMode)}
        <div class="muted" style="margin-top:7px">Straight ${(sa/ACRE).toFixed(4)} ac · GPS ${(ga/ACRE).toFixed(4)} ac</div>
      </div>`;
    }).join("")}</div>`;
  }
 }
-
 function downloadSavedFieldJson(id){
  const f=getSaved().find(x=>Number(x.id)===Number(id));
  if(!f){toast("Saved field not found","info");return;}
@@ -766,8 +862,6 @@ function msg(s){const e=$("message");e.textContent=s;e.classList.remove("hidden"
 const openBoundaries=new Set([1]);
 function toggleBoundary(id){openBoundaries.has(id)?openBoundaries.delete(id):openBoundaries.add(id);render()}
 
-$("overlayFieldsBtn").onclick=()=>{compareLayout="overlay";renderSavedComparison();toast("Inner / Outer view","info")};
-$("sideFieldsBtn").onclick=()=>{compareLayout="side";renderSavedComparison();toast("Side by side view","info")};
 $("compareStraightBtn").onclick=()=>{compareMode="outline";renderSavedComparison()};
 $("compareGpsBtn").onclick=()=>{compareMode="raw";renderSavedComparison()};
 $("compareBothBtn").onclick=()=>{compareMode="both";renderSavedComparison()};
