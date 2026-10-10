@@ -413,8 +413,37 @@ function render(){
  
  draw();renderSaved();
 }
+function savedOutlinePoints(f){
+ const ps=f.points||[],bs=f.boundaries||[];
+ if(!ps.length)return[];
+ const out=[ps[0]];
+ bs.forEach(b=>{
+   const own=ps.filter(p=>p.boundaryId===b.id);
+   if(own.length){const e=own.at(-1);if(out.at(-1)?.id!==e.id)out.push(e)}
+ });
+ return out;
+}
 function renderSaved(){
- const arr=getSaved();$("savedFields").innerHTML=arr.length?arr.map(f=>`<div class="savedField"><div class="row"><span><b>${escapeHtml(f.name)}</b><br><span class="muted">${new Date(f.date).toLocaleString()} · ${f.points.length} points</span></span><b>${(f.area/ACRE).toFixed(4)} ac</b></div><div class="row" style="margin-top:8px"><span class="muted">${f.perimeter.toFixed(2)} m perimeter</span><span><button class="tinybtn" onclick="openSaved(${f.id})">Open</button> <button class="tinybtn dangerText" onclick="deleteSaved(${f.id})">Delete</button></span></div></div>`).join(""):"No saved fields.";
+ const arr=getSaved();
+ $("savedFields").innerHTML=arr.length?arr.map(f=>{
+   const raw=f.points||[],outline=savedOutlinePoints(f);
+   const rawArea=polygonArea(raw),boundaryArea=polygonArea(outline);
+   const rawPer=perimeterValue(raw,true),boundaryPer=perimeterValue(outline,true);
+   return `<div class="savedField">
+     <div class="row"><span><b>${escapeHtml(f.name)}</b><br><span class="muted">${new Date(f.date).toLocaleString()} · ${raw.length} points</span></span></div>
+     <div style="margin-top:10px;padding-top:9px;border-top:1px solid #e6ebe7">
+       <div class="row"><b>Boundary View</b><b>${(boundaryArea/ACRE).toFixed(4)} ac</b></div>
+       <div class="muted">${boundaryArea.toFixed(2)} m² · ${(boundaryArea/CENT).toFixed(2)} cents · ${(boundaryArea/10000).toFixed(4)} ha</div>
+       <div class="muted">${boundaryPer.toFixed(2)} m perimeter</div>
+     </div>
+     <div style="margin-top:10px;padding-top:9px;border-top:1px solid #e6ebe7">
+       <div class="row"><b>GPS View</b><b>${(rawArea/ACRE).toFixed(4)} ac</b></div>
+       <div class="muted">${rawArea.toFixed(2)} m² · ${(rawArea/CENT).toFixed(2)} cents · ${(rawArea/10000).toFixed(4)} ha</div>
+       <div class="muted">${rawPer.toFixed(2)} m perimeter</div>
+     </div>
+     <div style="text-align:right;margin-top:10px"><button class="tinybtn" onclick="openSaved(${f.id})">Open</button> <button class="tinybtn dangerText" onclick="deleteSaved(${f.id})">Delete</button></div>
+   </div>`;
+ }).join(""):"No saved fields.";
 }
 function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]))}
 function toast(s,type="success"){const host=$("toastHost"),e=document.createElement("div");e.className="toast "+type;e.textContent=s;host.appendChild(e);setTimeout(()=>e.remove(),2600)}
